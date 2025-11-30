@@ -1,0 +1,13 @@
+# Python Dependencies for Daily Pipeline
+# 
+# Currently minimal - no external dependencies needed for basic HTML generation
+# Add packages here as you expand the pipeline (e.g., pandas, matplotlib, requests, etc.)
+
+# Future suggestions for data science pipelines:
+# pandas>=2.0.0
+# numpy>=1.24.0
+# matplotlib>=3.7.0
+# plotly>=5.14.0
+# requests>=2.31.0
+# beautifulsoup4>=4.12.0
+# jinja2>=3.1.0
