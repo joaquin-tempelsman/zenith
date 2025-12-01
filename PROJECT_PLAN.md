@@ -262,7 +262,7 @@ cd docean_droplet_work
 scp -r . root@your_droplet_ip:/opt/daily-html-pipeline
 ssh root@your_droplet_ip
 cd /opt/daily-html-pipeline
-chmod +x setup.sh
+chmod +x setup.sh run_pipeline.sh
 ./setup.sh
 ```
 

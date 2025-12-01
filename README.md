@@ -11,6 +11,9 @@ A simple automated pipeline that runs daily on a DigitalOcean droplet, generates
 git clone https://github.com/joaquin-tempelsman/zenith.git
 cd zenith
 
+# Make scripts executable
+chmod +x setup.sh run_pipeline.sh
+
 # Run the setup script
 sudo ./setup.sh
 ```
@@ -117,6 +120,18 @@ sudo ufw status verbose
 ### Verify cron job is scheduled
 ```bash
 crontab -l
+```
+
+### View cron execution history
+```bash
+# View recent cron executions
+grep CRON /var/log/syslog | tail -20
+
+# Or use journalctl
+journalctl -u cron | tail -20
+
+# Watch pipeline logs in real-time
+tail -f /var/log/daily-pipeline.log
 ```
 
 ### Check if cron is running
