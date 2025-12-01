@@ -101,15 +101,19 @@ else
     CRON_USER="root"
 fi
 
-# Add cron job for the appropriate user
-(crontab -u "$CRON_USER" -l 2>/dev/null | grep -v "run_pipeline.sh"; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
+# Remove any existing cron job for this pipeline and add new one
+(crontab -u "$CRON_USER" -l 2>/dev/null | grep -v "run_pipeline.sh" | grep -v "daily-pipeline"; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
 
 # Create log file with proper permissions
 touch /var/log/daily-pipeline.log
 chown "$CRON_USER:$CRON_USER" /var/log/daily-pipeline.log
 
 echo -e "${GREEN}  ✓ Cron job scheduled for user: $CRON_USER (every minute)${NC}"
-echo -e "${YELLOW}  Run 'crontab -l' as $CRON_USER to verify${NC}"
+echo -e "${YELLOW}  Verify with: crontab -l${NC}"
+
+# Show the cron job that was added
+echo -e "${YELLOW}  Added cron job:${NC}"
+crontab -u "$CRON_USER" -l | grep "run_pipeline.sh"
 
 echo ""
 echo -e "${BLUE}========================================"
