@@ -56,15 +56,14 @@ chown -R "$ACTUAL_USER:$ACTUAL_USER" /var/www/daily-pipeline
 echo -e "${GREEN}  ✓ Web directory created at /var/www/daily-pipeline${NC}"
 
 echo -e "${YELLOW}→ Step 6: Configuring Nginx...${NC}"
-# Backup existing default config if it exists
-if [ -f /etc/nginx/sites-enabled/default ]; then
-    mv /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/default.backup
-    echo "  Backed up default Nginx config"
-fi
+# Remove default site and any backups
+rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/default.backup
+echo "  Removed default Nginx sites"
 
 # Copy our Nginx config
 cp "$SCRIPT_DIR/nginx.conf" /etc/nginx/sites-available/daily-pipeline
-ln -sf /etc/nginx/sites-available/daily-pipeline /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/daily-pipeline /etc/nginx/sites-enabled/daily-pipeline
 
 # Test Nginx configuration
 nginx -t
@@ -94,13 +93,23 @@ sudo -u "$ACTUAL_USER" "$SCRIPT_DIR/run_pipeline.sh"
 
 echo -e "${YELLOW}→ Step 10: Setting up cron job...${NC}"
 CRON_CMD="* * * * * $SCRIPT_DIR/run_pipeline.sh >> /var/log/daily-pipeline.log 2>&1"
-(sudo -u "$ACTUAL_USER" crontab -l 2>/dev/null | grep -v "run_pipeline.sh"; echo "$CRON_CMD") | sudo -u "$ACTUAL_USER" crontab -
+
+# Determine which user to set cron for
+if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+    CRON_USER="$SUDO_USER"
+else
+    CRON_USER="root"
+fi
+
+# Add cron job for the appropriate user
+(crontab -u "$CRON_USER" -l 2>/dev/null | grep -v "run_pipeline.sh"; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
 
 # Create log file with proper permissions
 touch /var/log/daily-pipeline.log
-chown "$ACTUAL_USER:$ACTUAL_USER" /var/log/daily-pipeline.log
+chown "$CRON_USER:$CRON_USER" /var/log/daily-pipeline.log
 
-echo -e "${GREEN}  ✓ Cron job scheduled (every minute)${NC}"
+echo -e "${GREEN}  ✓ Cron job scheduled for user: $CRON_USER (every minute)${NC}"
+echo -e "${YELLOW}  Run 'crontab -l' as $CRON_USER to verify${NC}"
 
 echo ""
 echo -e "${BLUE}========================================"
