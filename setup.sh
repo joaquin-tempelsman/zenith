@@ -94,26 +94,18 @@ sudo -u "$ACTUAL_USER" "$SCRIPT_DIR/run_pipeline.sh"
 echo -e "${YELLOW}→ Step 10: Setting up cron job...${NC}"
 CRON_CMD="* * * * * $SCRIPT_DIR/run_pipeline.sh >> /var/log/daily-pipeline.log 2>&1"
 
-# Determine which user to set cron for
-if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
-    CRON_USER="$SUDO_USER"
-else
-    CRON_USER="root"
-fi
-
-# Remove any existing cron job for this pipeline and add new one
-(crontab -u "$CRON_USER" -l 2>/dev/null | grep -v "run_pipeline.sh" | grep -v "daily-pipeline"; echo "$CRON_CMD") | crontab -u "$CRON_USER" -
+# Add cron job - remove any existing ones for this pipeline first, then add new one
+(crontab -l 2>/dev/null | grep -v "run_pipeline.sh" | grep -v "daily-pipeline"; echo "$CRON_CMD") | crontab -
 
 # Create log file with proper permissions
 touch /var/log/daily-pipeline.log
-chown "$CRON_USER:$CRON_USER" /var/log/daily-pipeline.log
 
-echo -e "${GREEN}  ✓ Cron job scheduled for user: $CRON_USER (every minute)${NC}"
+echo -e "${GREEN}  ✓ Cron job scheduled (every minute)${NC}"
 echo -e "${YELLOW}  Verify with: crontab -l${NC}"
 
 # Show the cron job that was added
 echo -e "${YELLOW}  Added cron job:${NC}"
-crontab -u "$CRON_USER" -l | grep "run_pipeline.sh"
+crontab -l | grep "run_pipeline.sh"
 
 echo ""
 echo -e "${BLUE}========================================"
