@@ -1,248 +1,278 @@
-# Daily HTML Pipeline
+# Voice-Managed Inventory System
 
-A simple automated pipeline that runs daily on a DigitalOcean droplet, generates an HTML page with a timestamp, and serves it publicly via Nginx.
+A full-stack inventory management system with voice input support via Telegram bot, powered by FastAPI, SQLite, and Streamlit.
 
-## 🚀 Quick Start
+## 🚀 Features
 
-### On Your Droplet
-
-```bash
-# Clone this repository
-git clone https://github.com/joaquin-tempelsman/zenith.git
-cd zenith
-
-# Make scripts executable
-chmod +x setup.sh run_pipeline.sh
-
-# Run the setup script
-sudo ./setup.sh
-```
-
-That's it! Your pipeline is now running and accessible at your droplet's IP address.
+- 🎤 **Voice Input**: Send voice messages via Telegram for hands-free inventory management
+- 💬 **Text Input**: Also supports text-based commands
+- 🤖 **AI-Powered**: Uses OpenAI Whisper (STT) and GPT (intent parsing)
+- 📊 **Dashboard**: Real-time inventory monitoring with Streamlit
+- 💻 **SQL Runner**: Execute custom SQL queries directly from the UI
+- 📅 **Expiration Tracking**: Track item expiration dates
+- 🔔 **Smart Alerts**: Low stock and expiring items notifications
 
 ## 📁 Project Structure
 
 ```
-.
-├── generate_html.py      # Python script that generates the HTML
-├── run_pipeline.sh       # Bash script that runs the pipeline
-├── setup.sh              # One-time setup script
-├── requirements.txt      # Python dependencies
-├── nginx.conf            # Nginx web server configuration
-├── PROJECT_PLAN.md       # Detailed project documentation
-└── README.md             # This file
+inventory_project/
+├── .env                    # Environment variables
+├── .python-version         # Python version for uv
+├── pyproject.toml          # Project dependencies (uv)
+├── requirements.txt        # Legacy requirements (optional)
+├── src/
+│   ├── config.py           # Configuration management
+│   ├── main.py             # FastAPI application
+│   ├── database/
+│   │   ├── models.py       # SQLAlchemy models
+│   │   └── crud.py         # Database operations
+│   ├── services/
+│   │   ├── ai_processor.py # OpenAI integration
+│   │   └── telegram.py     # Telegram Bot API
+│   └── ui/
+│       └── dashboard.py    # Streamlit dashboard
 ```
 
-## 🔧 What Gets Installed
+## 🛠️ Tech Stack
 
-- Python 3 with virtual environment
-- Nginx web server (configured for IPv4 and IPv6)
-- UFW firewall (ports 80, 443, 22)
-- Cron job (runs every minute)
+- **Backend**: FastAPI (Async Python web framework)
+- **Database**: SQLite with SQLAlchemy ORM
+- **Frontend**: Streamlit
+- **AI**: OpenAI API (Whisper + GPT-4)
+- **Bot**: Telegram Bot API
+- **Package Manager**: uv (fast Python package manager)
 
-## 📋 Manual Usage
+## 📋 Prerequisites
 
-### Run the pipeline manually
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) installed
+- OpenAI API key
+- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
+
+## 🔧 Installation
+
+### 1. Install uv (if not already installed)
+
 ```bash
-./run_pipeline.sh
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-### View the generated HTML
+### 2. Clone and Setup
+
 ```bash
-cat /var/www/daily-pipeline/index.html
+cd inventory_project
+
+# Install dependencies with uv
+uv sync
+
+# Or install with dev dependencies
+uv sync --all-extras
 ```
 
-### Check logs
+### 3. Configure Environment Variables
+
+Edit the `.env` file with your credentials:
+
 ```bash
-tail -f /var/log/daily-pipeline.log
+# OpenAI API Configuration
+OPENAI_API_KEY=sk-...
+
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=123456789:ABC...
+
+# Database Configuration
+DATABASE_URL=sqlite:///./inventory.db
+
+# Dashboard Configuration
+DASHBOARD_PASSWORD=your_secure_password
+
+# Application Configuration
+APP_HOST=0.0.0.0
+APP_PORT=8000
 ```
 
-### Test locally
+### 4. Get Your Telegram Bot Token
+
+1. Open Telegram and search for [@BotFather](https://t.me/botfather)
+2. Send `/newbot` and follow the instructions
+3. Copy the bot token to your `.env` file
+
+## 🚀 Running the Application
+
+### Start FastAPI Backend
+
 ```bash
-curl http://localhost
+# Using uv
+uv run python -m uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# Or navigate to src folder
+cd src
+uv run uvicorn main:app --reload
 ```
 
-### Access from browser
-- IPv4: `http://YOUR_DROPLET_IP`
-- IPv6: `http://[YOUR_DROPLET_IPV6]`
+The API will be available at: `http://localhost:8000`
 
-## ⚙️ Configuration
+### Start Streamlit Dashboard
 
-### Change Cron Schedule
-
-Edit your crontab:
 ```bash
-crontab -e
+# Using uv (from project root)
+uv run streamlit run src/ui/dashboard.py
+
+# Or
+cd src/ui
+uv run streamlit run dashboard.py
 ```
 
-Current schedule (every minute):
-```
-* * * * * /opt/daily-html-pipeline/run_pipeline.sh >> /var/log/daily-pipeline.log 2>&1
-```
+The dashboard will be available at: `http://localhost:8501`
 
-**Common schedules:**
-- Every 5 minutes: `*/5 * * * *`
-- Every hour: `0 * * * *`
-- Every 6 hours: `0 */6 * * *`
-- Twice daily (6 AM & 6 PM): `0 6,18 * * *`
-- Every Monday at 9 AM: `0 9 * * 1`
+### Set Telegram Webhook
 
-### Change Output Directory
+Once FastAPI is running on a public URL (use ngrok for testing):
 
-Set the `HTML_OUTPUT_PATH` environment variable:
 ```bash
-export HTML_OUTPUT_PATH=/custom/path/index.html
-python3 generate_html.py
+# Using ngrok for testing
+ngrok http 8000
+
+# Then set webhook
+curl -X POST "http://localhost:8000/set-webhook?webhook_url=https://your-ngrok-url.ngrok.io/telegram-webhook"
 ```
 
-## 🛠️ Troubleshooting
+## 📱 Usage
 
-### Check Nginx status
+### Telegram Bot Commands
+
+Send voice or text messages to your bot:
+
+#### Adding Items
+- "Add 5 apples to fruits"
+- "Add 10 bottles of milk to dairy, expires 2025-12-15"
+
+#### Removing Items
+- "Remove 3 bananas"
+- "Take out 2 oranges"
+
+#### Setting Quantity
+- "Set milk to 10"
+- "Update apple quantity to 20"
+
+#### Checking Inventory
+- "Check apple quantity"
+- "How many bananas do we have?"
+
+#### Deleting Items
+- "Delete oranges"
+- "Remove tomatoes completely"
+
+### Dashboard Features
+
+#### Inventory Tab
+- View all items in a filterable table
+- Category breakdown charts
+- Low stock warnings
+- Expiring items alerts
+- Real-time statistics
+
+#### SQL Runner Tab
+- Execute custom SQL queries
+- View results in table format
+- Download results as CSV
+- Example queries provided
+
+## 🔐 Security
+
+- Dashboard protected with password authentication
+- Use environment variables for sensitive data
+- Never commit `.env` file to version control
+
+## 📊 Database Schema
+
+### Items Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | Integer | Primary key, auto-increment |
+| name | String | Item name |
+| quantity | Integer | Current stock quantity |
+| category | String | Item category |
+| expire_date | Date | Expiration date (optional) |
+| last_updated | DateTime | Last modification timestamp |
+
+## 🧪 Development
+
+### Install Dev Dependencies
+
 ```bash
-sudo systemctl status nginx
+uv sync --all-extras
 ```
 
-### Test Nginx configuration
+### Run Tests
+
 ```bash
-sudo nginx -t
+uv run pytest
 ```
 
-### Restart Nginx
+### Code Formatting
+
 ```bash
-sudo systemctl restart nginx
+# Format with black
+uv run black src/
+
+# Lint with ruff
+uv run ruff check src/
 ```
 
-### Check firewall
+## 📝 API Endpoints
+
+### FastAPI Endpoints
+
+- `GET /` - Health check and API info
+- `GET /health` - System health status
+- `POST /telegram-webhook` - Telegram webhook handler
+- `GET /webhook-info` - Get webhook status
+- `POST /set-webhook` - Set webhook URL
+- `GET /inventory` - Get all inventory items
+- `GET /inventory/summary` - Get inventory statistics
+
+### API Documentation
+
+Once FastAPI is running, visit:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+## 🐛 Troubleshooting
+
+### Database Not Found
 ```bash
-sudo ufw status verbose
+# Initialize database manually
+uv run python -c "from src.database.models import init_db; init_db()"
 ```
 
-### Verify cron job is scheduled
-```bash
-crontab -l
-```
+### Telegram Webhook Not Working
+- Ensure your FastAPI server is publicly accessible (use ngrok for testing)
+- Verify webhook URL is HTTPS
+- Check webhook status: `GET /webhook-info`
 
-### View cron execution history
-```bash
-# View recent cron executions
-grep CRON /var/log/syslog | tail -20
+### OpenAI API Errors
+- Verify API key is correct in `.env`
+- Check OpenAI account has credits
+- Ensure you have access to Whisper and GPT models
 
-# Or use journalctl
-journalctl -u cron | tail -20
+## 📚 Additional Resources
 
-# Watch pipeline logs in real-time
-tail -f /var/log/daily-pipeline.log
-```
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+- [Streamlit Documentation](https://docs.streamlit.io/)
+- [Telegram Bot API](https://core.telegram.org/bots/api)
+- [OpenAI API Documentation](https://platform.openai.com/docs)
+- [uv Documentation](https://github.com/astral-sh/uv)
 
-### Check if cron is running
-```bash
-sudo systemctl status cron
-```
+## 📄 License
 
-### View recent cron executions
-```bash
-grep CRON /var/log/syslog | tail -20
-```
-
-### Check Python virtual environment
-```bash
-source venv/bin/activate
-python --version
-pip list
-```
-
-## 🔐 Security Notes
-
-- **UFW Firewall**: Configured to allow HTTP (80), HTTPS (443), and SSH (22)
-- **Optional**: Set up DigitalOcean Cloud Firewall in the control panel for additional security
-- **SSH**: Consider restricting SSH access to your IP only
-- **Updates**: Keep system packages updated with `sudo apt update && sudo apt upgrade`
-
-## 📈 Expanding the Pipeline
-
-This project starts with a simple "Hello World" example. Here are ideas for expansion:
-
-### Add Data Visualization
-```python
-# Install matplotlib or plotly
-pip install matplotlib pandas
-```
-
-### Fetch External Data
-```python
-# Install requests
-pip install requests
-# Fetch from APIs, databases, etc.
-```
-
-### Use HTML Templates
-```python
-# Install jinja2
-pip install jinja2
-# Create professional-looking reports
-```
-
-### Add Multiple Pages
-```python
-# Generate dashboard, reports, archives
-# Update Nginx config to serve multiple endpoints
-```
-
-See `PROJECT_PLAN.md` for more detailed expansion ideas.
-
-## 📝 Files Explained
-
-### `generate_html.py`
-Python script that:
-- Gets current timestamp in `YYMMDD_HHMMSS` format
-- Creates styled HTML with "Hello World" and timestamp
-- Saves to `/var/www/daily-pipeline/index.html`
-
-### `run_pipeline.sh`
-Bash script that:
-- Activates Python virtual environment
-- Runs `generate_html.py`
-- Logs output
-- Used by cron for scheduled runs
-
-### `setup.sh`
-One-time setup script that:
-- Installs system packages
-- Creates Python virtual environment
-- Configures Nginx
-- Sets up firewall
-- Creates cron job
-- Runs initial pipeline
-
-### `nginx.conf`
-Web server configuration that:
-- Listens on IPv4 and IPv6
-- Serves files from `/var/www/daily-pipeline`
-- Includes security headers
-- Disables caching for development
-
-## 🌐 Network Information
-
-This project works with:
-- **IPv4**: Standard IP address access
-- **IPv6**: Full dual-stack support
-- **VPC**: DigitalOcean private networking ready
-
-Both IPv4 and IPv6 are handled automatically by Nginx and UFW.
-
-## 📜 License
-
-This is a toy project for learning purposes. Feel free to modify and use as you like.
+MIT License
 
 ## 🤝 Contributing
 
-This is a personal learning project, but suggestions are welcome!
-
-## 📞 Support
-
-For issues or questions, refer to `PROJECT_PLAN.md` for detailed documentation and troubleshooting steps.
-
----
-
-**Generated**: November 30, 2025  
-**Author**: Data Science Pipeline Project
+Contributions are welcome! Please feel free to submit a Pull Request.

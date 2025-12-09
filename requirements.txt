@@ -1,13 +1,31 @@
-# Python Dependencies for Daily Pipeline
-# 
-# Currently minimal - no external dependencies needed for basic HTML generation
-# Add packages here as you expand the pipeline (e.g., pandas, matplotlib, requests, etc.)
+# Core Dependencies
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
 
-# Future suggestions for data science pipelines:
-# pandas>=2.0.0
-# numpy>=1.24.0
-# matplotlib>=3.7.0
-# plotly>=5.14.0
-# requests>=2.31.0
-# beautifulsoup4>=4.12.0
-# jinja2>=3.1.0
+# Database
+sqlalchemy==2.0.25
+aiosqlite==0.19.0
+
+# OpenAI
+openai==1.10.0
+
+# HTTP Requests
+httpx==0.26.0
+requests==2.31.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Frontend
+streamlit==1.30.0
+
+# Audio Processing
+pydub==0.25.1
+
+# Date/Time
+python-dateutil==2.8.2
+
+# Type Hints
+pydantic==2.5.3
+pydantic-settings==2.1.0
