@@ -1,12 +1,13 @@
 """
 AI processing service for OpenAI API interactions.
-Handles speech-to-text transcription and intent parsing using GPT.
+Handles speech-to-text transcription and LangGraph-based intent processing.
 """
 import json
 from typing import Dict, Any, Optional
 from pathlib import Path
 from openai import OpenAI
 from ..config import settings
+from .inventory_agent import run_inventory_agent
 
 # Initialize OpenAI client
 client = OpenAI(api_key=settings.openai_api_key)
@@ -422,3 +423,39 @@ def generate_response_message(intent: Dict[str, Any], result: Any) -> str:
             return f"ℹ️ No history found for {target} in last {days} days"
     
     return "❌ I couldn't understand that request. Please try again."
+
+
+def process_user_input(user_input: str, db) -> Dict[str, Any]:
+    """
+    Process user input using the LangGraph-based inventory agent.
+    
+    This is the main entry point for processing natural language
+    inventory commands. It uses a router LLM to decide which tool
+    to execute based on the user's intent.
+    
+    Args:
+        user_input: Natural language text from the user
+        db: Database session
+        
+    Returns:
+        Dictionary containing:
+        - result: Raw result from the tool execution
+        - response_message: Human-readable response message
+        - tool_used: Name of the tool that was executed
+        - tool_args: Arguments passed to the tool
+    """
+    return run_inventory_agent(user_input, db)
+
+
+async def process_user_input_async(user_input: str, db) -> Dict[str, Any]:
+    """
+    Async version of process_user_input.
+    
+    Args:
+        user_input: Natural language text from the user
+        db: Database session
+        
+    Returns:
+        Dictionary with result and response_message
+    """
+    return process_user_input(user_input, db)

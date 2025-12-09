@@ -35,6 +35,10 @@
   - Invalid inputs could cause data corruption or security issues
   - The user explicitly requests it
 
+### 6. code execution and environments
+- When installing and running code use UV generated environment and UV as a package manager and package handler.
+- do not use pip.
+
 ## Workflow Checklist
 
 When completing a feature or code change:
