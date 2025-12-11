@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # OpenAI Configuration
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     
+    # Anthropic Configuration
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    
     # Telegram Configuration
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     

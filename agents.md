@@ -7,9 +7,8 @@
 - Keep responses concise and focused on the task at hand
 
 ### 2. Output File Locations
-- All test files must be located in `/chat_outs` folder
-- All `.md` files (when requested) must be located in `/chat_outs` folder
-- Ensure the `/chat_outs` directory exists before creating files in it
+- All test files must be located in `/chat_outs/tests` folder
+- All `.md` files (when requested) must be located in `/chat_outs/refs` folder
 
 ### 3. Testing Requirements
 - After finishing adding a new feature, **always validate that all tests pass**

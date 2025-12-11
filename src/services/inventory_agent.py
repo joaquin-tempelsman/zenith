@@ -1,494 +1,363 @@
 """
-LangGraph-based inventory management agent.
-Uses a router node (LLM) to decide which tool to execute based on user input.
+LangGraph 1.0 agent implementation for inventory management.
+Uses the new graph-based architecture with proper state management and middleware.
 """
-import json
-from typing import TypedDict, Annotated, Literal, Optional, List, Any
-from openai import OpenAI
-from langgraph.graph import StateGraph, END
+from typing import Optional, Any
+from datetime import datetime
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.types import StateSnapshot
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import tool as create_tool
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from . import inventory_tools
-
-# Initialize OpenAI client
-client = OpenAI(api_key=settings.openai_api_key)
-
-# Define tool names
-TOOL_ADD_ITEM = "add_item"
-TOOL_REMOVE_ITEM = "remove_item"
-TOOL_GET_ITEM_STOCK = "get_item_stock"
-TOOL_LIST_BY_CATEGORY = "list_by_category"
-TOOL_LIST_EXPIRING = "list_expiring"
-TOOL_GET_HISTORY = "get_history"
-TOOL_GET_SUMMARY = "get_summary"
-TOOL_CLARIFY = "clarify"
-
-
-class AgentState(TypedDict):
-    """State that flows through the graph."""
-    user_input: str
-    db: Any
-    existing_categories: List[str]
-    tool_name: str
-    tool_args: dict
-    result: dict
-    response_message: str
+from ..prompts import load_prompt
+from .llm_model import create_openai_model, OpenAIModel
+from .middleware import (
+    MiddlewareChain,
+    MiddlewareContext,
+    ModelCallLimitMiddleware,
+    ToolCallLimitMiddleware,
+    LLMToolSelectorMiddleware,
+    TodoListMiddleware,
+)
+from .inventory_tools import (
+    inventory_tools,
+    set_db_session,
+    get_all_categories,
+)
 
 
-def get_router_system_prompt(existing_categories: List[str]) -> str:
+class AgentState:
     """
-    Generate the system prompt for the router with current categories.
+    State container for the LangGraph agent.
+    Holds all relevant context and history during execution.
+    """
     
-    Args:
-        existing_categories: List of existing category names in the database
+    def __init__(self):
+        """Initialize agent state."""
+        self.messages = []
+        self.metadata = {}
+        self.current_iteration = 0
+        self.max_iterations = 10
+    
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Convert state to dictionary for LangGraph.
         
-    Returns:
-        System prompt string for the router LLM
-    """
-    categories_str = ", ".join(existing_categories) if existing_categories else "none yet"
-    
-    return f"""You are an inventory management router. Analyze user requests and decide which tool to call.
-
-EXISTING CATEGORIES in the inventory: [{categories_str}]
-
-Available tools:
-
-1. add_item - Add items to inventory
-   Arguments: item_name (required), quantity (int, optional), category (str, optional), expire_date (YYYY-MM-DD, optional), notes (str, optional)
-   Use when: user wants to add, put, stock items
-   IMPORTANT: If no category is specified, infer it from the item name or existing categories. Only create a new category if none match.
-
-2. remove_item - Remove items from inventory
-   Arguments: item_name (required), quantity (int, optional - null means remove all)
-   Use when: user wants to remove, take, use items
-
-3. get_item_stock - Check stock of a specific item
-   Arguments: item_name (required)
-   Use when: user asks about stock, quantity of a specific item
-
-4. list_by_category - List items in a category/group
-   Arguments: category (required)
-   Use when: user wants to see items in a category, group, or type
-
-5. list_expiring - List items by expiration date
-   Arguments: none
-   Use when: user asks about expiring items, expiration dates
-
-6. get_history - Get history of changes
-   Arguments: days (int, default 7), item_name (optional), category (optional)
-   Use when: user asks about history, recent changes, additions, removals
-
-7. get_summary - Get inventory overview
-   Arguments: none
-   Use when: user wants a summary, overview, or statistics
-
-8. clarify - Ask for clarification
-   Arguments: message (required - the clarification question)
-   Use when: the request is unclear, ambiguous, or missing critical information
-
-RESPONSE FORMAT - Return ONLY valid JSON:
-{{
-  "tool": "<tool_name>",
-  "args": {{<arguments>}}
-}}
-
-CATEGORY INFERENCE RULES (for add_item):
-- If user specifies a category, use it (lowercase)
-- If item matches an existing category context, use that category
-- Common mappings: milk/cheese/yogurt→dairy, apple/banana/orange→fruits, carrot/potato→vegetables, chicken/beef→meat, bread/pasta→grains
-- If uncertain but can reasonably infer, use the inferred category
-- Only use "general" if truly uncategorizable
-
-EXAMPLES:
-
-Input: "Add 5 apples"
-Existing categories: [fruits, dairy, vegetables]
-Output: {{"tool": "add_item", "args": {{"item_name": "apples", "quantity": 5, "category": "fruits"}}}}
-
-Input: "Add milk"
-Existing categories: [fruits, vegetables]
-Output: {{"tool": "add_item", "args": {{"item_name": "milk", "quantity": 1, "category": "dairy"}}}}
-
-Input: "Remove 3 bananas"
-Output: {{"tool": "remove_item", "args": {{"item_name": "bananas", "quantity": 3}}}}
-
-Input: "Remove all oranges"
-Output: {{"tool": "remove_item", "args": {{"item_name": "oranges", "quantity": null}}}}
-
-Input: "What's the stock of apples?"
-Output: {{"tool": "get_item_stock", "args": {{"item_name": "apples"}}}}
-
-Input: "Show dairy items"
-Output: {{"tool": "list_by_category", "args": {{"category": "dairy"}}}}
-
-Input: "What's expiring soon?"
-Output: {{"tool": "list_expiring", "args": {{}}}}
-
-Input: "Show changes last 14 days"
-Output: {{"tool": "get_history", "args": {{"days": 14}}}}
-
-Input: "Give me a summary"
-Output: {{"tool": "get_summary", "args": {{}}}}
-
-Input: "Do the thing"
-Output: {{"tool": "clarify", "args": {{"message": "I didn't understand your request. Could you please specify what action you want to perform? For example: add items, remove items, check stock, or list items."}}}}
-
-Input: "Add something"
-Output: {{"tool": "clarify", "args": {{"message": "What item would you like to add to the inventory? Please specify the item name and optionally the quantity."}}}}"""
-
-
-def router_node(state: AgentState) -> AgentState:
-    """
-    Router node that uses LLM to decide which tool to call.
-    
-    Args:
-        state: Current agent state with user input
-        
-    Returns:
-        Updated state with tool_name and tool_args set
-    """
-    user_input = state["user_input"]
-    existing_categories = state.get("existing_categories", [])
-    
-    system_prompt = get_router_system_prompt(existing_categories)
-    
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input}
-        ],
-        temperature=0.1,
-        max_tokens=300
-    )
-    
-    response_text = response.choices[0].message.content.strip()
-    
-    try:
-        # Remove markdown code blocks if present
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            response_text = "\n".join(lines[1:-1])
-        
-        parsed = json.loads(response_text)
-        state["tool_name"] = parsed.get("tool", TOOL_CLARIFY)
-        state["tool_args"] = parsed.get("args", {})
-    except json.JSONDecodeError:
-        state["tool_name"] = TOOL_CLARIFY
-        state["tool_args"] = {"message": "I had trouble understanding that request. Could you please rephrase?"}
-    
-    return state
-
-
-def execute_add_item(state: AgentState) -> AgentState:
-    """Execute the add_item tool."""
-    db = state["db"]
-    args = state["tool_args"]
-    
-    result = inventory_tools.add_item(
-        db=db,
-        item_name=args.get("item_name", ""),
-        quantity=args.get("quantity"),
-        category=args.get("category"),
-        expire_date=args.get("expire_date"),
-        notes=args.get("notes")
-    )
-    state["result"] = result
-    state["response_message"] = format_add_response(result)
-    return state
-
-
-def execute_remove_item(state: AgentState) -> AgentState:
-    """Execute the remove_item tool."""
-    db = state["db"]
-    args = state["tool_args"]
-    
-    result = inventory_tools.remove_item(
-        db=db,
-        item_name=args.get("item_name", ""),
-        quantity=args.get("quantity")
-    )
-    state["result"] = result
-    state["response_message"] = format_remove_response(result)
-    return state
-
-
-def execute_get_item_stock(state: AgentState) -> AgentState:
-    """Execute the get_item_stock tool."""
-    db = state["db"]
-    args = state["tool_args"]
-    
-    result = inventory_tools.get_item_stock(
-        db=db,
-        item_name=args.get("item_name", "")
-    )
-    state["result"] = result
-    state["response_message"] = format_stock_response(result)
-    return state
-
-
-def execute_list_by_category(state: AgentState) -> AgentState:
-    """Execute the list_by_category tool."""
-    db = state["db"]
-    args = state["tool_args"]
-    
-    result = inventory_tools.list_items_by_category(
-        db=db,
-        category=args.get("category", "")
-    )
-    state["result"] = result
-    state["response_message"] = format_category_response(result)
-    return state
-
-
-def execute_list_expiring(state: AgentState) -> AgentState:
-    """Execute the list_expiring tool."""
-    db = state["db"]
-    
-    result = inventory_tools.list_expiring_items(db=db)
-    state["result"] = result
-    state["response_message"] = format_expiring_response(result)
-    return state
-
-
-def execute_get_history(state: AgentState) -> AgentState:
-    """Execute the get_history tool."""
-    db = state["db"]
-    args = state["tool_args"]
-    
-    result = inventory_tools.get_item_history(
-        db=db,
-        days=args.get("days", 7),
-        item_name=args.get("item_name"),
-        category=args.get("category")
-    )
-    state["result"] = result
-    state["response_message"] = format_history_response(result)
-    return state
-
-
-def execute_get_summary(state: AgentState) -> AgentState:
-    """Execute the get_summary tool."""
-    db = state["db"]
-    
-    result = inventory_tools.get_inventory_summary(db=db)
-    state["result"] = result
-    state["response_message"] = format_summary_response(result)
-    return state
-
-
-def execute_clarify(state: AgentState) -> AgentState:
-    """Execute the clarify tool."""
-    args = state["tool_args"]
-    
-    result = inventory_tools.request_clarification(
-        message=args.get("message", "Could you please clarify your request?")
-    )
-    state["result"] = result
-    state["response_message"] = f"❓ {result['message']}"
-    return state
-
-
-def route_to_tool(state: AgentState) -> str:
-    """
-    Conditional edge function to route to the appropriate tool node.
-    
-    Args:
-        state: Current agent state with tool_name set
-        
-    Returns:
-        Name of the tool node to route to
-    """
-    tool_name = state.get("tool_name", TOOL_CLARIFY)
-    
-    tool_mapping = {
-        TOOL_ADD_ITEM: "add_item_node",
-        TOOL_REMOVE_ITEM: "remove_item_node",
-        TOOL_GET_ITEM_STOCK: "get_item_stock_node",
-        TOOL_LIST_BY_CATEGORY: "list_by_category_node",
-        TOOL_LIST_EXPIRING: "list_expiring_node",
-        TOOL_GET_HISTORY: "get_history_node",
-        TOOL_GET_SUMMARY: "get_summary_node",
-        TOOL_CLARIFY: "clarify_node"
-    }
-    
-    return tool_mapping.get(tool_name, "clarify_node")
-
-
-# Response formatting functions
-
-def format_add_response(result: dict) -> str:
-    """Format response for add_item operation."""
-    if not result.get("success"):
-        return f"❌ Error: {result.get('error', 'Unknown error')}"
-    
-    action = result.get("action")
-    item = result.get("item", "item")
-    
-    if action == "created":
-        return f"✅ Created new item '{item}' with quantity {result.get('quantity')} in category '{result.get('category')}'."
-    elif action == "updated":
-        return f"✅ Added {result.get('quantity_added')} to '{item}'. New quantity: {result.get('new_quantity')}"
-    elif action == "exists":
-        return f"ℹ️ Item '{item}' already exists with quantity {result.get('current_quantity')} in category '{result.get('category')}'."
-    
-    return "✅ Item added successfully."
-
-
-def format_remove_response(result: dict) -> str:
-    """Format response for remove_item operation."""
-    if not result.get("success"):
-        return f"❌ {result.get('error', 'Item not found')}"
-    
-    item = result.get("item", "item")
-    action = result.get("action")
-    
-    if action == "removed_all":
-        return f"✅ Removed all {result.get('quantity_removed')} '{item}' from inventory."
-    else:
-        return f"✅ Removed {result.get('quantity_removed')} '{item}'. Remaining: {result.get('remaining_quantity')}"
-
-
-def format_stock_response(result: dict) -> str:
-    """Format response for get_item_stock operation."""
-    if not result.get("success"):
-        return f"❌ {result.get('error', 'Item not found')}"
-    
-    item = result.get("item")
-    quantity = result.get("quantity")
-    category = result.get("category")
-    expire_date = result.get("expire_date")
-    
-    expire_info = f", Expires: {expire_date}" if expire_date else ""
-    return f"📊 {item}: {quantity} units in stock (Category: {category}{expire_info})"
-
-
-def format_category_response(result: dict) -> str:
-    """Format response for list_by_category operation."""
-    category = result.get("category", "unknown")
-    items = result.get("items", [])
-    
-    if not items:
-        return f"ℹ️ No items found in '{category}' category."
-    
-    items_list = "\n".join([f"- {item['name']}: {item['quantity']} units" for item in items[:10]])
-    return f"📦 Items in '{category}' category:\n{items_list}"
-
-
-def format_expiring_response(result: dict) -> str:
-    """Format response for list_expiring operation."""
-    items = result.get("items", [])
-    
-    if not items:
-        return "ℹ️ No items with expiration dates found."
-    
-    items_list = "\n".join([f"- {item['name']}: {item['expire_date']}" for item in items[:10]])
-    return f"📅 Items by expiration (soonest first):\n{items_list}"
-
-
-def format_history_response(result: dict) -> str:
-    """Format response for get_history operation."""
-    history = result.get("history", [])
-    days = result.get("days", 7)
-    item_filter = result.get("filter_item")
-    category_filter = result.get("filter_category")
-    
-    target = item_filter or category_filter or "all items"
-    
-    if not history:
-        return f"ℹ️ No history found for {target} in the last {days} days."
-    
-    history_list = "\n".join([
-        f"- {h['date']}: {h['action']} {h['quantity']} {h['item']}"
-        for h in history[:10]
-    ])
-    return f"📜 History for {target} (last {days} days):\n{history_list}"
-
-
-def format_summary_response(result: dict) -> str:
-    """Format response for get_summary operation."""
-    total_items = result.get("total_unique_items", 0)
-    total_quantity = result.get("total_quantity", 0)
-    categories = result.get("categories", [])
-    
-    categories_str = ", ".join(categories) if categories else "none"
-    return f"📊 Inventory Summary:\n- Unique items: {total_items}\n- Total quantity: {total_quantity}\n- Categories ({len(categories)}): {categories_str}"
-
-
-def build_inventory_graph() -> StateGraph:
-    """
-    Build and compile the LangGraph for inventory management.
-    
-    Returns:
-        Compiled StateGraph ready for execution
-    """
-    # Create the graph
-    workflow = StateGraph(AgentState)
-    
-    # Add nodes
-    workflow.add_node("router", router_node)
-    workflow.add_node("add_item_node", execute_add_item)
-    workflow.add_node("remove_item_node", execute_remove_item)
-    workflow.add_node("get_item_stock_node", execute_get_item_stock)
-    workflow.add_node("list_by_category_node", execute_list_by_category)
-    workflow.add_node("list_expiring_node", execute_list_expiring)
-    workflow.add_node("get_history_node", execute_get_history)
-    workflow.add_node("get_summary_node", execute_get_summary)
-    workflow.add_node("clarify_node", execute_clarify)
-    
-    # Set entry point
-    workflow.set_entry_point("router")
-    
-    # Add conditional edges from router to tool nodes
-    workflow.add_conditional_edges(
-        "router",
-        route_to_tool,
-        {
-            "add_item_node": "add_item_node",
-            "remove_item_node": "remove_item_node",
-            "get_item_stock_node": "get_item_stock_node",
-            "list_by_category_node": "list_by_category_node",
-            "list_expiring_node": "list_expiring_node",
-            "get_history_node": "get_history_node",
-            "get_summary_node": "get_summary_node",
-            "clarify_node": "clarify_node"
+        Returns:
+            Dictionary representation of state
+        """
+        return {
+            "messages": self.messages,
+            "metadata": self.metadata,
+            "current_iteration": self.current_iteration,
+            "max_iterations": self.max_iterations,
         }
-    )
-    
-    # All tool nodes end the graph
-    workflow.add_edge("add_item_node", END)
-    workflow.add_edge("remove_item_node", END)
-    workflow.add_edge("get_item_stock_node", END)
-    workflow.add_edge("list_by_category_node", END)
-    workflow.add_edge("list_expiring_node", END)
-    workflow.add_edge("get_history_node", END)
-    workflow.add_edge("get_summary_node", END)
-    workflow.add_edge("clarify_node", END)
-    
-    return workflow.compile()
 
 
-# Cached compiled graph
-_compiled_graph = None
-
-
-def get_inventory_graph():
+class InventoryAgent:
     """
-    Get the compiled inventory graph (cached).
+    LangGraph-based inventory management agent.
+    Coordinates model, tools, and middleware for agentic workflows.
+    """
     
+    def __init__(
+        self,
+        model: Optional[OpenAIModel] = None,
+        max_iterations: int = 10,
+        enable_middleware: bool = True,
+        verbose: bool = False,
+    ):
+        """
+        Initialize the inventory agent.
+        
+        Args:
+            model: OpenAI model wrapper (creates default if not provided)
+            max_iterations: Maximum iterations for agent loop
+            enable_middleware: Whether to enable middleware chain
+            verbose: Whether to print debug information
+        """
+        self.model = model or create_openai_model()
+        self.max_iterations = max_iterations
+        self.verbose = verbose
+        self._graph = None
+        self._db_session: Optional[Session] = None
+        
+        # Initialize middleware chain
+        self.middleware = MiddlewareChain()
+        if enable_middleware:
+            self.middleware.add(ModelCallLimitMiddleware(max_calls=max_iterations))
+            self.middleware.add(ToolCallLimitMiddleware(max_calls=max_iterations * 2))
+            self.middleware.add(LLMToolSelectorMiddleware(verbose=verbose))
+            self.middleware.add(TodoListMiddleware(verbose=verbose))
+    
+    def set_db_session(self, db: Session) -> None:
+        """
+        Set the database session for tool execution.
+        
+        Args:
+            db: SQLAlchemy database session
+        """
+        self._db_session = db
+        set_db_session(db)
+    
+    def _build_graph(self) -> Any:
+        """
+        Build the LangGraph execution graph.
+        
+        Returns:
+            Compiled execution graph
+        """
+        workflow = StateGraph(dict)
+        
+        # Define nodes
+        workflow.add_node("input_processor", self._process_input)
+        workflow.add_node("model_caller", self._call_model)
+        workflow.add_node("tool_executor", self._execute_tools)
+        workflow.add_node("response_formatter", self._format_response)
+        
+        # Define edges
+        workflow.add_edge(START, "input_processor")
+        workflow.add_edge("input_processor", "model_caller")
+        workflow.add_conditional_edges(
+            "model_caller",
+            self._should_use_tools,
+            {
+                "continue": "tool_executor",
+                "end": "response_formatter",
+            },
+        )
+        workflow.add_edge("tool_executor", "model_caller")
+        workflow.add_edge("response_formatter", END)
+        
+        return workflow.compile()
+    
+    def _process_input(self, state: dict[str, Any]) -> dict[str, Any]:
+        """
+        Process and validate input state.
+        
+        Args:
+            state: Current execution state
+            
+        Returns:
+            Updated state
+        """
+        if self.verbose:
+            print("📥 Processing input...")
+        
+        if "messages" not in state:
+            state["messages"] = []
+        
+        if "metadata" not in state:
+            state["metadata"] = {}
+        
+        state["metadata"]["input_processed_at"] = datetime.now().isoformat()
+        return state
+    
+    def _call_model(self, state: dict[str, Any]) -> dict[str, Any]:
+        """
+        Call the OpenAI model for the next action.
+        
+        Args:
+            state: Current execution state
+            
+        Returns:
+            Updated state with model response
+        """
+        if self.verbose:
+            print("🤖 Calling model...")
+        
+        self.model.increment_call_count()
+        
+        # Get system prompt with current context
+        existing_categories = get_all_categories.invoke({})
+        system_prompt = load_prompt(
+            "inventory_agent",
+            existing_categories=existing_categories
+        )
+        
+        # Build messages for model
+        messages = state.get("messages", [])
+        if not messages:
+            if "user_input" in state:
+                messages = [HumanMessage(content=state["user_input"])]
+        
+        # Call model with tools
+        response = self.model.instance.bind_tools(inventory_tools).invoke(
+            [SystemMessage(content=system_prompt)] + messages
+        )
+        
+        messages.append(response)
+        state["messages"] = messages
+        state["metadata"]["last_model_call"] = datetime.now().isoformat()
+        
+        return state
+    
+    def _should_use_tools(self, state: dict[str, Any]) -> str:
+        """
+        Determine if tools should be called or if we should end.
+        
+        Args:
+            state: Current execution state
+            
+        Returns:
+            Either "continue" to use tools or "end" to finish
+        """
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        
+        if last_message and hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            return "continue"
+        return "end"
+    
+    def _execute_tools(self, state: dict[str, Any]) -> dict[str, Any]:
+        """
+        Execute tool calls from the model response.
+        
+        Args:
+            state: Current execution state
+            
+        Returns:
+            Updated state with tool results
+        """
+        if self.verbose:
+            print("🔧 Executing tools...")
+        
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        
+        if not last_message or not hasattr(last_message, "tool_calls"):
+            return state
+        
+        tool_calls = last_message.tool_calls or []
+        
+        # Execute each tool call
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
+            tool_input = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
+            
+            # Find and execute the tool
+            for tool in inventory_tools:
+                if tool.name == tool_name:
+                    result = tool.invoke(tool_input)
+                    if self.verbose:
+                        print(f"  ✓ {tool_name}: {result[:50]}...")
+                    
+                    from langchain_core.messages import ToolMessage
+                    messages.append(ToolMessage(
+                        tool_call_id=tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", ""),
+                        name=tool_name,
+                        content=str(result),
+                    ))
+                    break
+        
+        state["messages"] = messages
+        state["metadata"]["last_tool_execution"] = datetime.now().isoformat()
+        
+        return state
+    
+    def _format_response(self, state: dict[str, Any]) -> dict[str, Any]:
+        """
+        Format the final response from the agent.
+        
+        Args:
+            state: Current execution state
+            
+        Returns:
+            Updated state with formatted response
+        """
+        if self.verbose:
+            print("📤 Formatting response...")
+        
+        messages = state.get("messages", [])
+        
+        # Find the last AI message with content
+        response_text = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and isinstance(msg.content, str) and msg.type == "ai":
+                response_text = msg.content
+                break
+        
+        state["final_response"] = response_text
+        state["metadata"]["completed_at"] = datetime.now().isoformat()
+        
+        return state
+    
+    def invoke(self, user_input: str, db: Session) -> dict[str, Any]:
+        """
+        Execute the agent with user input.
+        
+        Args:
+            user_input: The user's text input
+            db: Database session for tool execution
+            
+        Returns:
+            Dictionary with result, response_message, and metadata
+        """
+        self.set_db_session(db)
+        
+        # Initialize middleware context
+        context = MiddlewareContext(state={})
+        
+        # Before invoke middleware
+        context = self.middleware.before_invoke(context)
+        
+        # Build and execute graph
+        if self._graph is None:
+            self._graph = self._build_graph()
+        
+        initial_state = {
+            "user_input": user_input,
+            "messages": [],
+            "metadata": {"started_at": datetime.now().isoformat()},
+        }
+        
+        result = self._graph.invoke(initial_state)
+        
+        # After invoke middleware
+        context, result = self.middleware.after_invoke(context, result)
+        
+        # Extract response
+        response_message = result.get("final_response", "")
+        
+        return {
+            "result": "success",
+            "response_message": response_message,
+            "model_calls": self.model.get_call_count(),
+            "tools_used": context.tools_used,
+            "todos": context.todos,
+            "metadata": result.get("metadata", {}),
+        }
+
+
+def create_inventory_agent(
+    model: Optional[OpenAIModel] = None,
+    enable_middleware: bool = True,
+    verbose: bool = False,
+) -> InventoryAgent:
+    """
+    Factory function to create an inventory agent.
+    
+    Args:
+        model: OpenAI model wrapper (creates default if not provided)
+        enable_middleware: Whether to enable middleware
+        verbose: Whether to print debug information
+        
     Returns:
-        Compiled StateGraph
+        Configured InventoryAgent instance
     """
-    global _compiled_graph
-    if _compiled_graph is None:
-        _compiled_graph = build_inventory_graph()
-    return _compiled_graph
+    return InventoryAgent(
+        model=model,
+        enable_middleware=enable_middleware,
+        verbose=verbose,
+    )
 
 
 def run_inventory_agent(user_input: str, db: Session) -> dict:
     """
-    Run the inventory agent with user input.
+    Run the inventory agent with the LangGraph implementation.
     
     Args:
         user_input: The user's text input
@@ -497,27 +366,5 @@ def run_inventory_agent(user_input: str, db: Session) -> dict:
     Returns:
         Dictionary with result and response_message
     """
-    # Get existing categories for context
-    existing_categories = inventory_tools.get_all_categories(db)
-    
-    # Initialize state
-    initial_state: AgentState = {
-        "user_input": user_input,
-        "db": db,
-        "existing_categories": existing_categories,
-        "tool_name": "",
-        "tool_args": {},
-        "result": {},
-        "response_message": ""
-    }
-    
-    # Run the graph
-    graph = get_inventory_graph()
-    final_state = graph.invoke(initial_state)
-    
-    return {
-        "result": final_state.get("result", {}),
-        "response_message": final_state.get("response_message", ""),
-        "tool_used": final_state.get("tool_name", ""),
-        "tool_args": final_state.get("tool_args", {})
-    }
+    agent = create_inventory_agent(verbose=False)
+    return agent.invoke(user_input, db)

@@ -23,6 +23,7 @@ from .services.ai_processor import (
     route_action
 )
 from .services.telegram import telegram_bot
+from .services.inventory_agent import run_inventory_agent
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -276,6 +277,172 @@ async def get_inventory_summary(db: Session = Depends(get_db)):
     """
     summary = crud.get_inventory_summary(db)
     return summary
+
+
+# ============================================================================
+# NEW: LangGraph 1.0 Agent Endpoints
+# ============================================================================
+
+
+@app.post("/agent/process")
+async def agent_process(
+    user_input: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Process user input using the LangGraph 1.0 inventory agent.
+    
+    This endpoint uses the new agent system with:
+    - OpenAI API integration
+    - Middleware support (call limits, tool tracking, todos)
+    - Pydantic input validation
+    - Full message context management
+    
+    Args:
+        user_input: User's text input (or transcribed audio)
+        db: Database session dependency
+        
+    Returns:
+        JSON response with agent response and metadata
+    """
+    try:
+        result = run_inventory_agent(user_input, db)
+        return {
+            "status": result.get("result", "success"),
+            "response": result.get("response_message", ""),
+            "model_calls": result.get("model_calls", 0),
+            "tools_used": result.get("tools_used", []),
+            "todos": result.get("todos", []),
+            "metadata": result.get("metadata", {})
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "response": "❌ Error processing request with agent"
+        }
+
+
+@app.post("/agent/voice")
+async def agent_voice(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Process voice input using the LangGraph 1.0 inventory agent.
+    
+    Workflow:
+    1. Extract voice message from Telegram payload
+    2. Download and transcribe audio
+    3. Pass transcribed text to agent
+    4. Return agent response
+    
+    Args:
+        request: FastAPI request containing Telegram update
+        db: Database session dependency
+        
+    Returns:
+        JSON response with agent processing result
+    """
+    try:
+        payload = await request.json()
+        
+        if "message" not in payload or "voice" not in payload["message"]:
+            return {
+                "status": "error",
+                "error": "No voice message in payload"
+            }
+        
+        message = payload["message"]
+        file_id = message["voice"]["file_id"]
+        
+        # Get file info from Telegram
+        file_info = await telegram_bot.get_file_async(file_id)
+        if not file_info.get("ok"):
+            return {
+                "status": "error",
+                "error": "Failed to get file info from Telegram"
+            }
+        
+        file_path = file_info["result"]["file_path"]
+        
+        # Create temporary directory for audio files
+        temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Download audio file
+        audio_file_path = temp_dir / f"{file_id}.ogg"
+        download_success = await telegram_bot.download_file_async(
+            file_path,
+            str(audio_file_path)
+        )
+        
+        if not download_success:
+            return {
+                "status": "error",
+                "error": "Failed to download audio file"
+            }
+        
+        # Transcribe audio to text
+        transcribed_text = await transcribe_audio(str(audio_file_path))
+        
+        # Clean up audio file
+        try:
+            os.remove(audio_file_path)
+        except Exception:
+            pass
+        
+        # Process with agent
+        result = run_inventory_agent(transcribed_text, db)
+        
+        return {
+            "status": result.get("result", "success"),
+            "transcribed_text": transcribed_text,
+            "response": result.get("response_message", ""),
+            "model_calls": result.get("model_calls", 0),
+            "tools_used": result.get("tools_used", []),
+            "todos": result.get("todos", []),
+            "metadata": result.get("metadata", {})
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "response": "❌ Error processing voice with agent"
+        }
+
+
+@app.get("/agent/health")
+async def agent_health():
+    """
+    Check agent system health and configuration.
+    
+    Returns:
+        JSON response with agent status
+    """
+    try:
+        from .services.inventory_agent import create_inventory_agent
+        from .services.llm_model import create_openai_model
+        
+        # Try to instantiate agent components
+        model = create_openai_model()
+        agent = create_inventory_agent(model=model, enable_middleware=True)
+        
+        return {
+            "status": "healthy",
+            "agent_type": "LangGraph 1.0",
+            "model": "OpenAI",
+            "middleware_enabled": True,
+            "middleware_count": len(agent.middleware.middlewares) if hasattr(agent.middleware, 'middlewares') else 0,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "agent_type": "LangGraph 1.0"
+        }
 
 
 if __name__ == "__main__":
