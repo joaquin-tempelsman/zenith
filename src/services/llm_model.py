@@ -4,7 +4,7 @@ Provides a unified interface for model interactions with rate limiting and call 
 """
 from typing import Optional
 from langchain_openai import ChatOpenAI
-from langchain_core.language_model import BaseChatModel
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from ..config import settings
 

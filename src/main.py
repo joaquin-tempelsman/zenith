@@ -104,7 +104,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
         
         # Extract message data
         if "message" not in payload:
-            return JSONResponse({"status": "ignored", "reason": "no_message"})
+            return JSONResponse({"ok": True})
         
         message = payload["message"]
         chat_id = message["chat"]["id"]
@@ -168,7 +168,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
                 chat_id,
                 "❌ Please send either a text or voice message."
             )
-            return JSONResponse({"status": "ignored", "reason": "unsupported_type"})
+            return JSONResponse({"ok": True})
         
         # Parse intent from text
         intent = await parse_intent_async(text_input)
@@ -178,7 +178,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             if "error" in intent:
                 error_msg += f"\n\nDetails: {intent['error']}"
             await telegram_bot.send_message_async(chat_id, error_msg)
-            return JSONResponse({"status": "error", "reason": "unknown_intent", "intent": intent})
+            return JSONResponse({"ok": True})
         
         # Route to appropriate action handler
         try:
@@ -196,20 +196,11 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
         response_message = generate_response_message(intent, result)
         await telegram_bot.send_message_async(chat_id, response_message)
         
-        return JSONResponse({
-            "status": "success",
-            "action_type": intent.get("action_type"),
-            "intent": intent,
-            "response": response_message
-        })
+        return JSONResponse({"ok": True})
     
     except Exception as e:
         print(f"Error processing webhook: {str(e)}")
-        return JSONResponse({
-            "status": "error",
-            "error": str(e),
-            "type": "general"
-        }, status_code=500)
+        return JSONResponse({"ok": True}, status_code=200)
 
 
 @app.get("/webhook-info")
