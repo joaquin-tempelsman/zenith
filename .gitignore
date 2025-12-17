@@ -211,3 +211,6 @@ __marimo__/
 
 # Chat outputs
 chat_outs/
+
+# data related
+*.db
