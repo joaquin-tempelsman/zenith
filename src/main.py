@@ -4,8 +4,7 @@ Handles Telegram webhook for voice and text-based inventory management.
 """
 import os
 import tempfile
-from datetime import datetime, date
-from typing import Dict, Any
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Depends, HTTPException
@@ -13,17 +12,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .database.models import init_db, get_db, Item
+from .database.models import init_db, get_db
 from .database import crud
-from .services.ai_processor import (
-    transcribe_audio, 
-    parse_intent, 
-    parse_intent_async, 
-    generate_response_message,
-    route_action
-)
+from .services.ai_processor import transcribe_audio
 from .services.telegram import telegram_bot
-from .services.inventory_agent import run_inventory_agent
+from .services.agent import run_inventory_agent
+from .models import AgentConfig
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -78,129 +72,127 @@ async def health_check():
     }
 
 
-@app.post("/telegram-webhook")
-async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
+async def _process_telegram_webhook(request: Request, db: Session = Depends(get_db)):
     """
-    Telegram webhook endpoint to receive and process messages.
-    
+    Core webhook processing logic for Telegram messages.
+
     Workflow:
     1. Receive Telegram payload (voice or text)
     2. If voice: Download audio -> Transcribe with Whisper
     3. If text: Use text directly
-    4. Parse intent using GPT (structured JSON)
-    5. Execute database operation via CRUD
-    6. Reply to user via Telegram
-    
+    4. Process with LangChain agent (parse_intent -> modify_db/query_db)
+    5. Reply to user via Telegram
+
     Args:
         request: FastAPI request object containing Telegram update
         db: Database session dependency
-        
+
     Returns:
         JSON response with processing status
     """
     try:
-        # Parse incoming Telegram update
         payload = await request.json()
-        
-        # Extract message data
+        print(f"📨 Received webhook payload: {payload}")
+
         if "message" not in payload:
+            print("⚠️ No message in payload, skipping")
             return JSONResponse({"ok": True})
-        
+
         message = payload["message"]
         chat_id = message["chat"]["id"]
-        
-        # Initialize variables
+        print(f"💬 Processing message for chat_id: {chat_id}")
+
         text_input = None
-        
-        # Check if it's a voice message
+
         if "voice" in message:
             try:
                 voice = message["voice"]
                 file_id = voice["file_id"]
-                
-                # Get file info from Telegram
+
                 file_info = await telegram_bot.get_file_async(file_id)
-                
+
                 if not file_info.get("ok"):
                     raise Exception("Failed to get file info from Telegram")
-                
+
                 file_path = file_info["result"]["file_path"]
-                
-                # Create temporary directory for audio files
+
                 temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
                 temp_dir.mkdir(exist_ok=True)
-                
-                # Download audio file
+
                 audio_file_path = temp_dir / f"{file_id}.ogg"
                 download_success = await telegram_bot.download_file_async(
-                    file_path, 
-                    str(audio_file_path)
+                    file_path, str(audio_file_path)
                 )
-                
+
                 if not download_success:
                     raise Exception("Failed to download audio file")
-                
-                # Transcribe audio to text
-                text_input = await transcribe_audio(str(audio_file_path))
-                
-                # Clean up audio file
+
+                text_input = transcribe_audio(str(audio_file_path))
+
                 try:
                     os.remove(audio_file_path)
                 except Exception:
                     pass
-                    
+
             except Exception as e:
                 error_msg = f"❌ Error processing voice message: {str(e)}"
                 await telegram_bot.send_message_async(chat_id, error_msg)
-                return JSONResponse({
-                    "status": "error",
-                    "error": str(e),
-                    "type": "voice_processing"
-                })
-        
-        # Check if it's a text message
+                return JSONResponse(
+                    {"status": "error", "error": str(e), "type": "voice_processing"}
+                )
+
         elif "text" in message:
             text_input = message["text"]
-        
+            print(f"📝 Received text message: {text_input}")
+
         else:
-            # Unsupported message type
+            print("❌ No text or voice in message")
             await telegram_bot.send_message_async(
-                chat_id,
-                "❌ Please send either a text or voice message."
+                chat_id, "❌ Please send either a text or voice message."
             )
             return JSONResponse({"ok": True})
-        
-        # Parse intent from text
-        intent = await parse_intent_async(text_input)
-        
-        if intent.get("action_type") == "unknown":
-            error_msg = "❌ I couldn't understand your request. Please try again."
-            if "error" in intent:
-                error_msg += f"\n\nDetails: {intent['error']}"
-            await telegram_bot.send_message_async(chat_id, error_msg)
-            return JSONResponse({"ok": True})
-        
-        # Route to appropriate action handler
+
         try:
-            result = route_action(intent, db)
+            print(f"🤖 Processing with agent: {text_input}")
+            result = run_inventory_agent(text_input, db)
+            response_message = result.get("response_message", "")
+            print(f"✅ Agent response: {response_message}")
+
+            if not response_message:
+                response_message = "❌ I couldn't process your request. Please try again."
+
+            print(f"📤 Sending response to chat_id {chat_id}: {response_message}")
+            await telegram_bot.send_message_async(chat_id, response_message)
+            print("✅ Response sent successfully")
+            return JSONResponse({"ok": True})
+
         except Exception as e:
-            error_msg = f"❌ Database error: {str(e)}"
+            error_msg = f"❌ Error processing request: {str(e)}"
+            print(f"🚨 Agent processing error: {str(e)}")
             await telegram_bot.send_message_async(chat_id, error_msg)
-            return JSONResponse({
-                "status": "error",
-                "error": str(e),
-                "type": "database"
-            })
-        
-        # Generate and send response message
-        response_message = generate_response_message(intent, result)
-        await telegram_bot.send_message_async(chat_id, response_message)
-        
-        return JSONResponse({"ok": True})
-    
+            return JSONResponse(
+                {"status": "error", "error": str(e), "type": "agent_processing"}
+            )
+
     except Exception as e:
-        print(f"Error processing webhook: {str(e)}")
+        print(f"🚨 Webhook processing error: {str(e)}")
         return JSONResponse({"ok": True}, status_code=200)
+
+
+@app.post("/telegram-webhook")
+async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Telegram webhook endpoint to receive and process messages.
+    """
+    return await _process_telegram_webhook(request, db)
+
+
+@app.post("/webhook")
+async def webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Alternative webhook endpoint (alias for /telegram-webhook).
+    """
+    return await _process_telegram_webhook(request, db)
 
 
 @app.get("/webhook-info")
@@ -276,23 +268,19 @@ async def get_inventory_summary(db: Session = Depends(get_db)):
 
 
 @app.post("/agent/process")
-async def agent_process(
-    user_input: str,
-    db: Session = Depends(get_db)
-):
+async def agent_process(user_input: str, db: Session = Depends(get_db)):
     """
-    Process user input using the LangGraph 1.0 inventory agent.
-    
+    Process user input using the LangChain 1.0 inventory agent.
+
     This endpoint uses the new agent system with:
-    - OpenAI API integration
-    - Middleware support (call limits, tool tracking, todos)
+    - OpenAI API integration via LangChain create_agent
+    - Tools: parse_intent, modify_db, query_db
     - Pydantic input validation
-    - Full message context management
-    
+
     Args:
         user_input: User's text input (or transcribed audio)
         db: Database session dependency
-        
+
     Returns:
         JSON response with agent response and metadata
     """
@@ -301,16 +289,14 @@ async def agent_process(
         return {
             "status": result.get("result", "success"),
             "response": result.get("response_message", ""),
-            "model_calls": result.get("model_calls", 0),
             "tools_used": result.get("tools_used", []),
-            "todos": result.get("todos", []),
-            "metadata": result.get("metadata", {})
+            "metadata": result.get("metadata", {}),
         }
     except Exception as e:
         return {
             "status": "error",
             "error": str(e),
-            "response": "❌ Error processing request with agent"
+            "response": "❌ Error processing request with agent",
         }
 
 
@@ -375,32 +361,30 @@ async def agent_voice(
             }
         
         # Transcribe audio to text
-        transcribed_text = await transcribe_audio(str(audio_file_path))
-        
+        transcribed_text = transcribe_audio(str(audio_file_path))
+
         # Clean up audio file
         try:
             os.remove(audio_file_path)
         except Exception:
             pass
-        
+
         # Process with agent
         result = run_inventory_agent(transcribed_text, db)
-        
+
         return {
             "status": result.get("result", "success"),
             "transcribed_text": transcribed_text,
             "response": result.get("response_message", ""),
-            "model_calls": result.get("model_calls", 0),
             "tools_used": result.get("tools_used", []),
-            "todos": result.get("todos", []),
-            "metadata": result.get("metadata", {})
+            "metadata": result.get("metadata", {}),
         }
-        
+
     except Exception as e:
         return {
             "status": "error",
             "error": str(e),
-            "response": "❌ Error processing voice with agent"
+            "response": "❌ Error processing voice with agent",
         }
 
 
@@ -408,39 +392,33 @@ async def agent_voice(
 async def agent_health():
     """
     Check agent system health and configuration.
-    
+
     Returns:
         JSON response with agent status
     """
     try:
-        from .services.inventory_agent import create_inventory_agent
-        from .services.llm_model import create_openai_model
-        
-        # Try to instantiate agent components
-        model = create_openai_model()
-        agent = create_inventory_agent(model=model, enable_middleware=True)
-        
+        from .services.agent import create_inventory_agent
+
+        agent = create_inventory_agent()
+
         return {
             "status": "healthy",
-            "agent_type": "LangGraph 1.0",
-            "model": "OpenAI",
-            "middleware_enabled": True,
-            "middleware_count": len(agent.middleware.middlewares) if hasattr(agent.middleware, 'middlewares') else 0,
-            "timestamp": datetime.utcnow().isoformat()
+            "agent_type": "LangChain 1.0",
+            "model": "OpenAI gpt-4o-mini",
+            "tools": ["parse_intent", "modify_db", "query_db"],
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         return {
             "status": "error",
             "error": str(e),
-            "agent_type": "LangGraph 1.0"
+            "agent_type": "LangChain 1.0",
         }
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
-        "main:app",
-        host=settings.app_host,
-        port=settings.app_port,
-        reload=True
+        "main:app", host=settings.app_host, port=settings.app_port, reload=True
     )

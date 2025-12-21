@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     app_host: str = os.getenv("APP_HOST", "0.0.0.0")
     app_port: int = int(os.getenv("APP_PORT", "8000"))
     
+    # LangSmith Configuration
+    langsmith_tracing: str = os.getenv("LANGSMITH_TRACING", "false")
+    langsmith_api_key: str = os.getenv("LANGSMITH_API_KEY", "")
+    langsmith_endpoint: str = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+    langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "default")
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
