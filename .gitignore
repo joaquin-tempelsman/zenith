@@ -214,3 +214,14 @@ chat_outs/
 
 # data related
 *.db
+
+# Docker
+data/
+backups/
+nginx/logs/
+nginx/ssl/*.pem
+nginx/ssl/*.key
+
+# Deployment
+.env.production
+.env.local
