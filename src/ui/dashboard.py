@@ -65,11 +65,15 @@ def logout():
 def get_db_session() -> Session:
     """
     Get a database session.
-    
+
     Returns:
         Database session instance
     """
-    return SessionLocal()
+    # Create a new session with autoflush to ensure fresh data
+    session = SessionLocal()
+    # Expire all objects to force reload from database
+    session.expire_all()
+    return session
 
 
 def inventory_tab():

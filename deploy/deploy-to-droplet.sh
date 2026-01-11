@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Production Deployment Script
-# Deploy to Digital Ocean or any cloud VM
+# Deploy to DigitalOcean Droplet
+# This script should be run ON the droplet after code is pulled
 
 set -e
 
@@ -9,7 +9,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 echo "════════════════════════════════════════════════════════"
-echo "  🚀 Production Deployment"
+echo "  🚀 Deploying to DigitalOcean Droplet"
 echo "════════════════════════════════════════════════════════"
 echo ""
 
@@ -38,55 +38,87 @@ fi
 echo -e "${BLUE}✅ Docker is running${NC}"
 echo ""
 
-# Pull latest code
-echo -e "${YELLOW}Pulling latest code...${NC}"
-git pull origin main || echo "Not a git repository or no remote configured"
+# Create data directory with proper permissions
+echo -e "${YELLOW}Setting up data directory...${NC}"
+mkdir -p data
+chmod 777 data
 
 echo ""
-echo -e "${YELLOW}Building production images...${NC}"
-docker compose -f docker-compose.prod.yml build --no-cache
+echo -e "${YELLOW}Building Docker images...${NC}"
+docker compose build
 
 echo ""
 echo -e "${YELLOW}Cleaning up build cache to free disk space...${NC}"
+echo "This is important for small droplets with limited disk space"
 docker builder prune -af
 docker system prune -f
 
 echo ""
 echo -e "${YELLOW}Stopping existing services...${NC}"
-docker compose -f docker-compose.prod.yml down
+docker compose down
 
 echo ""
-echo -e "${YELLOW}Starting production services...${NC}"
-docker compose -f docker-compose.prod.yml up -d
+echo -e "${YELLOW}Starting services (including ngrok for Telegram webhook)...${NC}"
+docker compose up -d api dashboard ngrok
 
 echo ""
-echo -e "${YELLOW}Waiting for services to be healthy...${NC}"
-sleep 10
+echo -e "${YELLOW}Waiting for services to start (30 seconds)...${NC}"
+sleep 30
 
 # Check service health
+echo ""
+echo -e "${YELLOW}Checking service health...${NC}"
 if curl -f http://localhost:8000/health > /dev/null 2>&1; then
     echo -e "${GREEN}✅ API is healthy!${NC}"
 else
     echo -e "${RED}❌ API health check failed${NC}"
-    docker compose -f docker-compose.prod.yml logs api
+    echo "Showing API logs:"
+    docker compose logs api --tail=30
     exit 1
 fi
 
+if curl -f http://localhost:8501 > /dev/null 2>&1; then
+    echo -e "${GREEN}✅ Dashboard is accessible!${NC}"
+else
+    echo -e "${YELLOW}⚠️  Dashboard health check failed (may still be starting)${NC}"
+fi
+
 echo ""
-echo -e "${YELLOW}Cleaning up old images...${NC}"
+echo -e "${YELLOW}Setting up Telegram webhook with ngrok...${NC}"
+# Run webhook setup container
+docker compose run --rm webhook-setup
+
+echo ""
+echo -e "${YELLOW}Cleaning up old/unused images...${NC}"
 docker image prune -af
 
 echo ""
 echo "════════════════════════════════════════════════════════"
-echo -e "${GREEN}✅ Production Deployment Complete!${NC}"
+echo -e "${GREEN}✅ Deployment Complete!${NC}"
 echo "════════════════════════════════════════════════════════"
 echo ""
 echo -e "${BLUE}Service Status:${NC}"
-docker compose -f docker-compose.prod.yml ps
+docker compose ps
+echo ""
+echo -e "${BLUE}Resource Usage:${NC}"
+docker stats --no-stream
+echo ""
+echo -e "${BLUE}Disk Usage:${NC}"
+df -h / | grep -v Filesystem
+echo ""
+echo -e "${BLUE}Memory Usage:${NC}"
+free -h | grep -v total
 echo ""
 echo -e "${BLUE}Useful Commands:${NC}"
-echo "  View logs:      docker compose -f docker-compose.prod.yml logs -f"
-echo "  Stop services:  docker compose -f docker-compose.prod.yml down"
-echo "  Restart:        docker compose -f docker-compose.prod.yml restart"
+echo "  View logs:      docker compose logs -f"
+echo "  View API logs:  docker compose logs -f api"
+echo "  Stop services:  docker compose down"
+echo "  Restart:        docker compose restart"
+echo "  Check status:   docker compose ps"
+echo ""
+echo -e "${YELLOW}Note: For small droplets (512MB RAM), monitor memory usage regularly${NC}"
+echo "  Check memory:   free -h"
+echo "  Check disk:     df -h"
+echo "  Clean Docker:   docker system prune -af"
 echo ""
 

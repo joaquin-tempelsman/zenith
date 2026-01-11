@@ -24,8 +24,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -u 1000 appuser
+# Create non-root user with specific UID/GID for volume compatibility
+RUN groupadd -g 1000 appuser && \
+    useradd -m -u 1000 -g 1000 appuser
 
 # Set working directory
 WORKDIR /app
@@ -39,8 +40,10 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy application code
 COPY --chown=appuser:appuser . .
 
-# Create necessary directories
-RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
+# Create necessary directories with proper permissions
+# Note: When using volume mounts, ensure host directory has proper permissions
+RUN mkdir -p /app/data && \
+    chmod 777 /app/data
 
 # Switch to non-root user
 USER appuser

@@ -64,7 +64,7 @@ services:
     networks:
       - inventory-network
 
-  # ngrok tunnel for development (exposes local server to internet)
+  # ngrok tunnel (exposes local/production server to internet for Telegram webhook)
   ngrok:
     image: ngrok/ngrok:latest
     container_name: inventory-ngrok
@@ -79,8 +79,6 @@ services:
         condition: service_healthy
     networks:
       - inventory-network
-    profiles:
-      - dev
 
   # Webhook setup service (runs once to configure Telegram webhook)
   webhook-setup:
@@ -103,8 +101,6 @@ services:
         condition: service_started
     networks:
       - inventory-network
-    profiles:
-      - dev
 
   # Nginx Reverse Proxy (optional, for production)
   nginx:

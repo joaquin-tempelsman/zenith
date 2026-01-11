@@ -5,6 +5,9 @@
 
 set -e
 
+# Set non-interactive mode to avoid prompts
+export DEBIAN_FRONTEND=noninteractive
+
 echo "════════════════════════════════════════════════════════"
 echo "  🌊 Digital Ocean Droplet Setup"
 echo "════════════════════════════════════════════════════════"
@@ -25,11 +28,12 @@ fi
 
 echo -e "${BLUE}1️⃣  Updating system packages...${NC}"
 apt-get update
-apt-get upgrade -y
+# Use non-interactive upgrade with automatic config file handling
+apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
 
 echo ""
 echo -e "${BLUE}2️⃣  Installing required packages...${NC}"
-apt-get install -y \
+apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
     curl \
     git \
     ufw \
@@ -51,7 +55,8 @@ echo \
 
 # Install Docker
 apt-get update
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 # Start and enable Docker
 systemctl start docker
