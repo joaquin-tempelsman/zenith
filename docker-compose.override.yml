@@ -25,7 +25,12 @@ services:
 
   ngrok:
     restart: always
-    # ngrok runs in production too for Telegram webhook
+    command:
+      - "http"
+      - "api:8000"
+      - "--domain=uninflammable-nonlive-samuel.ngrok-free.dev"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN_PROD}
 
   webhook-setup:
     environment:

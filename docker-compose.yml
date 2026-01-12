@@ -73,11 +73,14 @@ services:
     image: ngrok/ngrok:latest
     container_name: inventory-ngrok
     restart: unless-stopped
-    command: http api:8000
+    command:
+      - "http"
+      - "api:8000"
+      - "--domain=juniper-subcritical-diurnally.ngrok-free.dev"
     ports:
       - "4040:4040"  # ngrok web interface
     environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN_DEV:-${NGROK_AUTHTOKEN:-}}
     depends_on:
       api:
         condition: service_healthy
