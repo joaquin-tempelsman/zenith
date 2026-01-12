@@ -9,7 +9,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 echo "════════════════════════════════════════════════════════"
-echo "  🚀 Deploying to DigitalOcean Droplet"
+echo "  🚀 Deploying to DigitalOcean Droplet (PRODUCTION)"
 echo "════════════════════════════════════════════════════════"
 echo ""
 
@@ -19,6 +19,13 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+
+# Ensure ENVIRONMENT is set to production
+export ENVIRONMENT=production
+
+echo -e "${BLUE}Environment:${NC} ${GREEN}PRODUCTION${NC}"
+echo -e "${BLUE}Bot Token:${NC} Using TELEGRAM_BOT_TOKEN_PROD"
+echo ""
 
 # Check if .env exists
 if [ ! -f .env ]; then

@@ -11,9 +11,11 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
+      - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
       - DATABASE_URL=sqlite:///./data/inventory.db
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-admin123}
       - APP_HOST=0.0.0.0
@@ -45,9 +47,11 @@ services:
     ports:
       - "8501:8501"
     environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
+      - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
       - DATABASE_URL=sqlite:///./data/inventory.db
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-admin123}
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
@@ -88,7 +92,9 @@ services:
     container_name: inventory-webhook-setup
     restart: "no"
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
+      - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./scripts:/app/scripts
