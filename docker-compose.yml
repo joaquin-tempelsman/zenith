@@ -76,7 +76,7 @@ services:
     command:
       - "http"
       - "api:8000"
-      - "--domain=juniper-subcritical-diurnally.ngrok-free.dev"
+      - "--domain=${NGROK_DOMAIN_DEV:-juniper-subcritical-diurnally.ngrok-free.dev}"
     ports:
       - "4040:4040"  # ngrok web interface
     environment:

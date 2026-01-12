@@ -28,7 +28,7 @@ services:
     command:
       - "http"
       - "api:8000"
-      - "--domain=uninflammable-nonlive-samuel.ngrok-free.dev"
+      - "--domain=${NGROK_DOMAIN_PROD}"
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN_PROD}
 
