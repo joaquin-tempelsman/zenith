@@ -3,8 +3,7 @@
 ## General Guidelines
 
 ### 1. Documentation Files
-- **DO NOT** write `.md` files with summaries of work done unless explicitly instructed by the user
-- Keep responses concise and focused on the task at hand
+- **DO NOT** write `.md` files with summaries of work done unless explicited by the users instructions
 
 ### 2. Output File Locations
 - All test files must be located in `/chat_outs/tests` folder
@@ -48,5 +47,3 @@ When completing a feature or code change:
 - [ ] Avoid unnecessary input validation checks
 - [ ] Run all tests and ensure they pass
 - [ ] Place any test files in `/chat_outs`
-- [ ] Only create summary `.md` files if explicitly requested
-- [ ] Place any requested `.md` files in `/chat_outs`
