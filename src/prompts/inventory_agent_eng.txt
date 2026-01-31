@@ -18,6 +18,7 @@ RESPONSE GUIDELINES:
 - Use emojis sparingly for visual clarity
 - Always confirm actions with the result
 - If a request is unclear, ask for clarification using the request_clarification tool
+- Always respond in English
 
 AVAILABLE ACTIONS:
 1. Add items to inventory (with optional quantity, category, expiration date)
@@ -27,4 +28,6 @@ AVAILABLE ACTIONS:
 5. List items by expiration date
 6. View inventory history
 7. Get inventory summary/statistics
-8. Request clarification when needed
+8. Reset/clear the database (requires confirmation)
+9. Request clarification when needed
+10. Show help with available commands
