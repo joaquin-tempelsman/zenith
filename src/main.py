@@ -7,12 +7,11 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 
 from .config import settings
-from .database.models import init_db, get_db
+from .database.models import init_db, get_session_for_user
 from .database import crud
 from .services.ai_processor import transcribe_audio
 from .services.telegram import telegram_bot
@@ -72,20 +71,20 @@ async def health_check():
     }
 
 
-async def _process_telegram_webhook(request: Request, db: Session = Depends(get_db)):
+async def _process_telegram_webhook(request: Request):
     """
     Core webhook processing logic for Telegram messages.
 
     Workflow:
     1. Receive Telegram payload (voice or text)
-    2. If voice: Download audio -> Transcribe with Whisper
-    3. If text: Use text directly
-    4. Process with LangChain agent (parse_intent -> modify_db/query_db)
-    5. Reply to user via Telegram
+    2. Extract chat_id and open a per-user database session
+    3. If voice: Download audio -> Transcribe with Whisper
+    4. If text: Use text directly
+    5. Process with LangChain agent (parse_intent -> modify_db/query_db)
+    6. Reply to user via Telegram
 
     Args:
         request: FastAPI request object containing Telegram update
-        db: Database session dependency
 
     Returns:
         JSON response with processing status
@@ -102,77 +101,84 @@ async def _process_telegram_webhook(request: Request, db: Session = Depends(get_
         chat_id = message["chat"]["id"]
         print(f"💬 Processing message for chat_id: {chat_id}")
 
-        text_input = None
-
-        if "voice" in message:
-            try:
-                voice = message["voice"]
-                file_id = voice["file_id"]
-
-                file_info = await telegram_bot.get_file_async(file_id)
-
-                if not file_info.get("ok"):
-                    raise Exception("Failed to get file info from Telegram")
-
-                file_path = file_info["result"]["file_path"]
-
-                temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
-                temp_dir.mkdir(exist_ok=True)
-
-                audio_file_path = temp_dir / f"{file_id}.ogg"
-                download_success = await telegram_bot.download_file_async(
-                    file_path, str(audio_file_path)
-                )
-
-                if not download_success:
-                    raise Exception("Failed to download audio file")
-
-                text_input = transcribe_audio(str(audio_file_path))
-
-                try:
-                    os.remove(audio_file_path)
-                except Exception:
-                    pass
-
-            except Exception as e:
-                error_msg = f"❌ Error processing voice message: {str(e)}"
-                await telegram_bot.send_message_async(chat_id, error_msg)
-                return JSONResponse(
-                    {"status": "error", "error": str(e), "type": "voice_processing"}
-                )
-
-        elif "text" in message:
-            text_input = message["text"]
-            print(f"📝 Received text message: {text_input}")
-
-        else:
-            print("❌ No text or voice in message")
-            await telegram_bot.send_message_async(
-                chat_id, "❌ Please send either a text or voice message."
-            )
-            return JSONResponse({"ok": True})
+        # Open per-user database session; close it when the request is done
+        db = get_session_for_user(chat_id)
 
         try:
-            print(f"🤖 Processing with agent: {text_input}")
-            result = run_inventory_agent(text_input, db)
-            response_message = result.get("response_message", "")
-            print(f"✅ Agent response: {response_message}")
+            text_input = None
 
-            if not response_message:
-                response_message = "❌ I couldn't process your request. Please try again."
+            if "voice" in message:
+                try:
+                    voice = message["voice"]
+                    file_id = voice["file_id"]
 
-            print(f"📤 Sending response to chat_id {chat_id}: {response_message}")
-            await telegram_bot.send_message_async(chat_id, response_message)
-            print("✅ Response sent successfully")
-            return JSONResponse({"ok": True})
+                    file_info = await telegram_bot.get_file_async(file_id)
 
-        except Exception as e:
-            error_msg = f"❌ Error processing request: {str(e)}"
-            print(f"🚨 Agent processing error: {str(e)}")
-            await telegram_bot.send_message_async(chat_id, error_msg)
-            return JSONResponse(
-                {"status": "error", "error": str(e), "type": "agent_processing"}
-            )
+                    if not file_info.get("ok"):
+                        raise Exception("Failed to get file info from Telegram")
+
+                    file_path = file_info["result"]["file_path"]
+
+                    temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
+                    temp_dir.mkdir(exist_ok=True)
+
+                    audio_file_path = temp_dir / f"{file_id}.ogg"
+                    download_success = await telegram_bot.download_file_async(
+                        file_path, str(audio_file_path)
+                    )
+
+                    if not download_success:
+                        raise Exception("Failed to download audio file")
+
+                    text_input = transcribe_audio(str(audio_file_path))
+
+                    try:
+                        os.remove(audio_file_path)
+                    except Exception:
+                        pass
+
+                except Exception as e:
+                    error_msg = f"❌ Error processing voice message: {str(e)}"
+                    await telegram_bot.send_message_async(chat_id, error_msg)
+                    return JSONResponse(
+                        {"status": "error", "error": str(e), "type": "voice_processing"}
+                    )
+
+            elif "text" in message:
+                text_input = message["text"]
+                print(f"📝 Received text message: {text_input}")
+
+            else:
+                print("❌ No text or voice in message")
+                await telegram_bot.send_message_async(
+                    chat_id, "❌ Please send either a text or voice message."
+                )
+                return JSONResponse({"ok": True})
+
+            try:
+                print(f"🤖 Processing with agent: {text_input}")
+                result = run_inventory_agent(text_input, db, chat_id)
+                response_message = result.get("response_message", "")
+                print(f"✅ Agent response: {response_message}")
+
+                if not response_message:
+                    response_message = "❌ I couldn't process your request. Please try again."
+
+                print(f"📤 Sending response to chat_id {chat_id}: {response_message}")
+                await telegram_bot.send_message_async(chat_id, response_message)
+                print("✅ Response sent successfully")
+                return JSONResponse({"ok": True})
+
+            except Exception as e:
+                error_msg = f"❌ Error processing request: {str(e)}"
+                print(f"🚨 Agent processing error: {str(e)}")
+                await telegram_bot.send_message_async(chat_id, error_msg)
+                return JSONResponse(
+                    {"status": "error", "error": str(e), "type": "agent_processing"}
+                )
+
+        finally:
+            db.close()
 
     except Exception as e:
         print(f"🚨 Webhook processing error: {str(e)}")
@@ -180,19 +186,31 @@ async def _process_telegram_webhook(request: Request, db: Session = Depends(get_
 
 
 @app.post("/telegram-webhook")
-async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
+async def telegram_webhook(request: Request):
     """
     Telegram webhook endpoint to receive and process messages.
+
+    Args:
+        request: FastAPI request object containing the Telegram update payload
+
+    Returns:
+        JSON response with processing status
     """
-    return await _process_telegram_webhook(request, db)
+    return await _process_telegram_webhook(request)
 
 
 @app.post("/webhook")
-async def webhook(request: Request, db: Session = Depends(get_db)):
+async def webhook(request: Request):
     """
     Alternative webhook endpoint (alias for /telegram-webhook).
+
+    Args:
+        request: FastAPI request object containing the Telegram update payload
+
+    Returns:
+        JSON response with processing status
     """
-    return await _process_telegram_webhook(request, db)
+    return await _process_telegram_webhook(request)
 
 
 @app.get("/webhook-info")
@@ -230,36 +248,43 @@ async def set_webhook(webhook_url: str):
 
 # Additional inventory management endpoints
 @app.get("/inventory")
-async def get_inventory(db: Session = Depends(get_db)):
+async def get_inventory(chat_id: int):
     """
-    Get all inventory items.
-    
+    Get all inventory items for a specific user.
+
     Args:
-        db: Database session dependency
-        
+        chat_id: Telegram chat/user ID whose inventory to retrieve
+
     Returns:
-        JSON response with all items
+        JSON response with all items and total count
     """
-    items = crud.get_all_items(db)
-    return {
-        "items": [item.to_dict() for item in items],
-        "count": len(items)
-    }
+    db = get_session_for_user(chat_id)
+    try:
+        items = crud.get_all_items(db)
+        return {
+            "items": [item.to_dict() for item in items],
+            "count": len(items),
+        }
+    finally:
+        db.close()
 
 
 @app.get("/inventory/summary")
-async def get_inventory_summary(db: Session = Depends(get_db)):
+async def get_inventory_summary(chat_id: int):
     """
-    Get inventory summary statistics.
-    
+    Get inventory summary statistics for a specific user.
+
     Args:
-        db: Database session dependency
-        
+        chat_id: Telegram chat/user ID whose inventory to summarise
+
     Returns:
         JSON response with summary data
     """
-    summary = crud.get_inventory_summary(db)
-    return summary
+    db = get_session_for_user(chat_id)
+    try:
+        return crud.get_inventory_summary(db)
+    finally:
+        db.close()
 
 
 # ============================================================================
@@ -268,7 +293,7 @@ async def get_inventory_summary(db: Session = Depends(get_db)):
 
 
 @app.post("/agent/process")
-async def agent_process(user_input: str, db: Session = Depends(get_db)):
+async def agent_process(user_input: str, chat_id: int):
     """
     Process user input using the LangChain 1.0 inventory agent.
 
@@ -276,16 +301,18 @@ async def agent_process(user_input: str, db: Session = Depends(get_db)):
     - OpenAI API integration via LangChain create_agent
     - Tools: parse_intent, modify_db, query_db
     - Pydantic input validation
+    - Per-user database isolation
 
     Args:
         user_input: User's text input (or transcribed audio)
-        db: Database session dependency
+        chat_id: Telegram chat/user ID whose database to use
 
     Returns:
         JSON response with agent response and metadata
     """
+    db = get_session_for_user(chat_id)
     try:
-        result = run_inventory_agent(user_input, db)
+        result = run_inventory_agent(user_input, db, chat_id)
         return {
             "status": result.get("result", "success"),
             "response": result.get("response_message", ""),
@@ -298,87 +325,91 @@ async def agent_process(user_input: str, db: Session = Depends(get_db)):
             "error": str(e),
             "response": "❌ Error processing request with agent",
         }
+    finally:
+        db.close()
 
 
 @app.post("/agent/voice")
-async def agent_voice(
-    request: Request,
-    db: Session = Depends(get_db)
-):
+async def agent_voice(request: Request):
     """
     Process voice input using the LangGraph 1.0 inventory agent.
-    
+
     Workflow:
-    1. Extract voice message from Telegram payload
-    2. Download and transcribe audio
-    3. Pass transcribed text to agent
-    4. Return agent response
-    
+    1. Extract chat_id and voice message from Telegram payload
+    2. Open per-user database session
+    3. Download and transcribe audio
+    4. Pass transcribed text to agent
+    5. Return agent response
+
     Args:
-        request: FastAPI request containing Telegram update
-        db: Database session dependency
-        
+        request: FastAPI request containing Telegram update payload
+
     Returns:
         JSON response with agent processing result
     """
     try:
         payload = await request.json()
-        
+
         if "message" not in payload or "voice" not in payload["message"]:
             return {
                 "status": "error",
-                "error": "No voice message in payload"
+                "error": "No voice message in payload",
             }
-        
+
         message = payload["message"]
+        chat_id = message["chat"]["id"]
         file_id = message["voice"]["file_id"]
-        
-        # Get file info from Telegram
-        file_info = await telegram_bot.get_file_async(file_id)
-        if not file_info.get("ok"):
-            return {
-                "status": "error",
-                "error": "Failed to get file info from Telegram"
-            }
-        
-        file_path = file_info["result"]["file_path"]
-        
-        # Create temporary directory for audio files
-        temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
-        temp_dir.mkdir(exist_ok=True)
-        
-        # Download audio file
-        audio_file_path = temp_dir / f"{file_id}.ogg"
-        download_success = await telegram_bot.download_file_async(
-            file_path,
-            str(audio_file_path)
-        )
-        
-        if not download_success:
-            return {
-                "status": "error",
-                "error": "Failed to download audio file"
-            }
-        
-        # Transcribe audio to text
-        transcribed_text = transcribe_audio(str(audio_file_path))
 
-        # Clean up audio file
+        db = get_session_for_user(chat_id)
         try:
-            os.remove(audio_file_path)
-        except Exception:
-            pass
+            # Get file info from Telegram
+            file_info = await telegram_bot.get_file_async(file_id)
+            if not file_info.get("ok"):
+                return {
+                    "status": "error",
+                    "error": "Failed to get file info from Telegram",
+                }
 
-        # Process with agent
-        result = run_inventory_agent(transcribed_text, db)
+            file_path = file_info["result"]["file_path"]
 
-        return {
-            "status": result.get("result", "success"),
-            "transcribed_text": transcribed_text,
-            "response": result.get("response_message", ""),
-            "tools_used": result.get("tools_used", []),
-            "metadata": result.get("metadata", {}),
-        }
+            # Create temporary directory for audio files
+            temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
+            temp_dir.mkdir(exist_ok=True)
+
+            # Download audio file
+            audio_file_path = temp_dir / f"{file_id}.ogg"
+            download_success = await telegram_bot.download_file_async(
+                file_path,
+                str(audio_file_path),
+            )
+
+            if not download_success:
+                return {
+                    "status": "error",
+                    "error": "Failed to download audio file",
+                }
+
+            # Transcribe audio to text
+            transcribed_text = transcribe_audio(str(audio_file_path))
+
+            # Clean up audio file
+            try:
+                os.remove(audio_file_path)
+            except Exception:
+                pass
+
+            # Process with agent
+            result = run_inventory_agent(transcribed_text, db, chat_id)
+
+            return {
+                "status": result.get("result", "success"),
+                "transcribed_text": transcribed_text,
+                "response": result.get("response_message", ""),
+                "tools_used": result.get("tools_used", []),
+                "metadata": result.get("metadata", {}),
+            }
+        finally:
+            db.close()
 
     except Exception as e:
         return {

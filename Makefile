@@ -48,18 +48,18 @@ dev: build up-dev
 
 build:
 	@echo "🔨 Building Docker images..."
-	docker compose build
+	docker compose -f docker/docker-compose.yml build
 
 up:
 	@echo "🚀 Starting development services..."
-	docker compose up -d
+	docker compose -f docker/docker-compose.yml up -d
 	@echo "✅ Services started!"
 	@echo "📱 API: http://localhost:8000"
 	@echo "🎨 Dashboard: http://localhost:8501"
 
 up-dev:
 	@echo "🚀 Starting development services with ngrok..."
-	docker compose --profile dev up -d
+	docker compose -f docker/docker-compose.yml --profile dev up -d
 	@echo ""
 	@echo "⏳ Waiting for webhook setup..."
 	@sleep 5
@@ -76,24 +76,24 @@ up-dev:
 
 down:
 	@echo "🛑 Stopping services..."
-	docker compose down
+	docker compose -f docker/docker-compose.yml down
 
 logs:
-	docker compose logs -f
+	docker compose -f docker/docker-compose.yml logs -f
 
 logs-api:
-	docker compose logs -f api
+	docker compose -f docker/docker-compose.yml logs -f api
 
 logs-dash:
-	docker compose logs -f dashboard
+	docker compose -f docker/docker-compose.yml logs -f dashboard
 
 restart:
 	@echo "🔄 Restarting services..."
-	docker compose restart
+	docker compose -f docker/docker-compose.yml restart
 
 clean:
 	@echo "🧹 Cleaning up..."
-	docker compose down -v
+	docker compose -f docker/docker-compose.yml down -v
 	docker system prune -f
 
 # Production commands
@@ -101,19 +101,19 @@ prod: prod-build prod-up
 
 prod-build:
 	@echo "🔨 Building production images..."
-	docker compose -f docker-compose.prod.yml build --no-cache
+	docker compose -f docker/docker-compose.prod.yml build --no-cache
 
 prod-up:
 	@echo "🚀 Starting production services..."
-	docker compose -f docker-compose.prod.yml up -d
+	docker compose -f docker/docker-compose.prod.yml up -d
 	@echo "✅ Production services started!"
 
 prod-down:
 	@echo "🛑 Stopping production services..."
-	docker compose -f docker-compose.prod.yml down
+	docker compose -f docker/docker-compose.prod.yml down
 
 prod-logs:
-	docker compose -f docker-compose.prod.yml logs -f
+	docker compose -f docker/docker-compose.prod.yml logs -f
 
 deploy:
 	@echo "🚀 Deploying to production..."
@@ -139,7 +139,7 @@ format:
 # Database commands
 db-init:
 	@echo "🗄️  Initializing database..."
-	docker compose exec api python -c "from src.database.models import init_db; init_db(); print('✅ Database initialized')"
+	docker compose -f docker/docker-compose.yml exec api python -c "from src.database.models import init_db; init_db(); print('✅ Database initialized')"
 
 db-backup:
 	@echo "💾 Backing up database..."
@@ -150,7 +150,7 @@ db-backup:
 # Utilities
 shell:
 	@echo "🐚 Opening shell in API container..."
-	docker compose exec api /bin/bash
+	docker compose -f docker/docker-compose.yml exec api /bin/bash
 
 health:
 	@echo "❤️  Checking application health..."
@@ -158,7 +158,7 @@ health:
 
 ps:
 	@echo "📊 Running containers:"
-	docker compose ps
+	docker compose -f docker/docker-compose.yml ps
 
 # Setup commands
 setup:

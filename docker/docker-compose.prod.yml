@@ -11,7 +11,7 @@ services:
     environment:
       - ENVIRONMENT=production
     volumes:
-      - ./data:/app/data
+      - ../data:/app/data
       # Remove src volume mount for production (no hot-reload)
 
   dashboard:
@@ -20,7 +20,7 @@ services:
     environment:
       - ENVIRONMENT=production
     volumes:
-      - ./data:/app/data
+      - ../data:/app/data
       # Remove src volume mount for production (no hot-reload)
 
   ngrok:

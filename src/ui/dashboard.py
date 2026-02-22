@@ -1,19 +1,23 @@
 """
 Streamlit Dashboard for Voice-Managed Inventory System.
 Provides UI for viewing inventory and running SQL queries.
+
+Supports per-user SQLite databases: the sidebar lists all known users
+(derived from ``inventory_<chat_id>.db`` files in the data directory)
+and the admin selects which one to inspect.
 """
+import re
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
-from sqlalchemy.orm import Session
-import sys
 from pathlib import Path
+import sys
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.config import settings
-from src.database.models import SessionLocal, init_db
+from src.database.models import get_session_for_user
 from src.database import crud
 
 
@@ -62,28 +66,53 @@ def logout():
     st.rerun()
 
 
-def get_db_session() -> Session:
+def list_user_chat_ids() -> list[int]:
     """
-    Get a database session.
+    Scan the data directory for per-user SQLite files and return their chat IDs.
+
+    Files are expected to be named ``inventory_<chat_id>.db``.
 
     Returns:
-        Database session instance
+        Sorted list of integer chat IDs found on disk
     """
-    # Create a new session with autoflush to ensure fresh data
-    session = SessionLocal()
-    # Expire all objects to force reload from database
+    raw_path = settings.database_url.replace("sqlite:///", "")
+    data_dir = Path(raw_path).parent
+    pattern = re.compile(r"^inventory_(-?\d+)\.db$")
+    chat_ids = []
+    if data_dir.exists():
+        for f in data_dir.iterdir():
+            m = pattern.match(f.name)
+            if m:
+                chat_ids.append(int(m.group(1)))
+    return sorted(chat_ids)
+
+
+def get_db_session(chat_id: int):
+    """
+    Get a fresh database session for the given user.
+
+    Args:
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        SQLAlchemy Session bound to that user's database
+    """
+    session = get_session_for_user(chat_id)
     session.expire_all()
     return session
 
 
-def inventory_tab():
+def inventory_tab(chat_id: int):
     """
-    Display the Inventory tab with all items.
+    Display the Inventory tab with all items for the selected user.
+
+    Args:
+        chat_id: Telegram chat/user ID whose inventory to display
     """
     st.header("📦 Inventory Overview")
-    
+
     # Get database session
-    db = get_db_session()
+    db = get_db_session(chat_id)
     
     try:
         # Get all items
@@ -223,22 +252,25 @@ def inventory_tab():
         db.close()
 
 
-def sql_runner_tab():
+def sql_runner_tab(chat_id: int):
     """
-    Display the SQL Runner tab for executing custom queries.
+    Display the SQL Runner tab for executing custom queries against a user's DB.
+
+    Args:
+        chat_id: Telegram chat/user ID whose database to query
     """
     st.header("💻 SQL Query Runner")
-    
+
     st.warning("⚠️ Be careful! This executes raw SQL queries directly on the database.")
-    
+
     # SQL input
     sql_query = st.text_area(
         "Enter SQL Query",
         height=150,
         placeholder="SELECT * FROM items WHERE quantity > 10;",
-        help="Enter a SQL query to execute against the inventory database"
+        help="Enter a SQL query to execute against the inventory database",
     )
-    
+
     # Example queries
     with st.expander("📝 Example Queries"):
         st.code("-- Get all items\nSELECT * FROM items;", language="sql")
@@ -246,44 +278,38 @@ def sql_runner_tab():
         st.code("-- Get low stock items\nSELECT * FROM items WHERE quantity < 5;", language="sql")
         st.code("-- Get items expiring soon\nSELECT * FROM items WHERE expire_date <= date('now', '+7 days');", language="sql")
         st.code("-- Count items by category\nSELECT category, COUNT(*) as count FROM items GROUP BY category;", language="sql")
-    
+
     # Execute button
     if st.button("▶️ Execute Query", type="primary"):
         if not sql_query.strip():
             st.error("❌ Please enter a SQL query")
             return
-        
-        db = get_db_session()
-        
+
+        db = get_db_session(chat_id)
+
         try:
-            # Execute query
             results = crud.execute_raw_sql(db, sql_query)
-            
+
             if not results:
                 st.success("✅ Query executed successfully (no results returned)")
                 return
-            
-            # Display results
+
             st.success(f"✅ Query executed successfully! Retrieved {len(results)} rows.")
-            
-            # Convert to DataFrame
+
             df = pd.DataFrame(results)
-            
-            # Display results
             st.dataframe(df, use_container_width=True, hide_index=True)
-            
-            # Download button
+
             csv = df.to_csv(index=False)
             st.download_button(
                 label="📥 Download Results as CSV",
                 data=csv,
                 file_name=f"query_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
+                mime="text/csv",
             )
-            
+
         except Exception as e:
             st.error(f"❌ Error executing query: {str(e)}")
-        
+
         finally:
             db.close()
 
@@ -291,62 +317,77 @@ def sql_runner_tab():
 def main():
     """
     Main dashboard application.
+
+    Renders the Streamlit UI with authentication, a per-user selector in the
+    sidebar, and two tabs: Inventory Overview and SQL Runner.  The selected
+    Telegram ``chat_id`` is passed down to both tabs so that each operates on
+    the correct per-user SQLite database.
     """
     # Page configuration
     st.set_page_config(
         page_title="Inventory Dashboard",
         page_icon="📦",
         layout="wide",
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="expanded",
     )
-    
-    # Initialize database
-    init_db()
-    
+
     # Check authentication
     if not check_authentication():
         login_page()
         return
-    
+
     # Sidebar
     with st.sidebar:
         st.title("📦 Inventory System")
         st.markdown("---")
-        
-        # User info
+
+        # User info / logout
         st.success("✅ Logged In")
-        
         if st.button("🚪 Logout", use_container_width=True):
             logout()
-        
+
         st.markdown("---")
-        
+
+        # Per-user selector
+        st.subheader("👤 Select User")
+        user_ids = list_user_chat_ids()
+        if not user_ids:
+            st.warning("No user databases found yet.\nSend a message to the bot first.")
+            return
+        selected_chat_id = st.selectbox(
+            "Chat ID",
+            user_ids,
+            format_func=lambda cid: str(cid),
+        )
+
+        st.markdown("---")
+
         # System info
         st.subheader("ℹ️ System Information")
-        st.text(f"Database: SQLite")
-        st.text(f"FastAPI: Running")
-        st.text(f"Version: 1.0.0")
-        
+        st.text("Database: SQLite (per-user)")
+        st.text("FastAPI: Running")
+        st.text("Version: 1.0.0")
+
         st.markdown("---")
-        
+
         # Refresh button
         if st.button("🔄 Refresh Data", use_container_width=True):
             st.rerun()
-    
+
     # Main title
     st.title("📦 Voice-Managed Inventory Dashboard")
-    st.markdown("Monitor and manage your inventory system")
-    
+    st.markdown(f"Viewing data for user **{selected_chat_id}**")
+
     st.markdown("---")
-    
+
     # Create tabs
     tab1, tab2 = st.tabs(["📊 Inventory", "💻 SQL Runner"])
-    
+
     with tab1:
-        inventory_tab()
-    
+        inventory_tab(selected_chat_id)
+
     with tab2:
-        sql_runner_tab()
+        sql_runner_tab(selected_chat_id)
 
 
 if __name__ == "__main__":

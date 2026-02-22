@@ -299,21 +299,19 @@ def get_history(db: Session, days: int, item: Optional[str] = None, group: Optio
     
     return history
 
-
 def delete_all_items(db: Session) -> int:
     """
     Delete all items from the inventory.
-    
+
     Args:
         db: Database session
-        
+
     Returns:
         Number of items deleted
     """
-    count = db.query(Item).count()
-    db.query(Item).delete()
+    deleted_count = db.query(Item).delete()
     db.commit()
-    return count
+    return deleted_count
 
 
 def create_items_batch(
