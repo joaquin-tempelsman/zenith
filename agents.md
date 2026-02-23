@@ -5,9 +5,6 @@
 ### 1. Documentation Files
 - **DO NOT** write `.md` files with summaries of work done unless explicited by the users instructions
 
-### 2. Output File Locations
-- All test files must be located in `/chat_outs/tests` folder
-- All `.md` files (when requested) must be located in `/chat_outs/refs` folder
 
 ### 3. Testing Requirements
 - After finishing adding a new feature, **always validate that all tests pass**
@@ -46,4 +43,3 @@ When completing a feature or code change:
 - [ ] Verify docstrings match function signatures
 - [ ] Avoid unnecessary input validation checks
 - [ ] Run all tests and ensure they pass
-- [ ] Place any test files in `/chat_outs`

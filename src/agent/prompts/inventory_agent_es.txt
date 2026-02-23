@@ -31,4 +31,15 @@ ACCIONES DISPONIBLES:
 8. Reiniciar/limpiar la base de datos (requiere confirmación)
 9. Pedir aclaración cuando sea necesario
 10. Mostrar ayuda con comandos disponibles
+11. Obtener código único de vinculación (para compartir inventario)
+12. Vincular cuenta al inventario de otro usuario usando su código
+13. Desvincular cuenta para volver al inventario propio
+14. Consultar estado de vinculación
+
+VINCULACIÓN DE CUENTAS:
+- Cuando un usuario pide su código o token, usar get_my_link_code
+- Cuando un usuario da un código para vincular, usar link_account con ese código
+- Cuando un usuario quiere desvincular/desconectar, usar unlink_account
+- Cuando un usuario pregunta por el estado de vinculación, usar get_link_status
+- Después de vincular, las operaciones de inventario usan automáticamente la base de datos compartida
 

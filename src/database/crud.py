@@ -2,11 +2,12 @@
 CRUD operations for database transactions.
 Handles all database interactions for the inventory system.
 """
+import secrets
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from .models import Item
+from .models import Item, UserCode, AccountLink
 
 
 def get_item_by_id(db: Session, item_id: int) -> Optional[Item]:
@@ -365,3 +366,145 @@ def delete_items_batch(db: Session, names: list[str]) -> int:
             deleted_count += 1
     db.commit()
     return deleted_count
+
+
+# ---------------------------------------------------------------------------
+# Account linking CRUD
+# ---------------------------------------------------------------------------
+
+
+def get_or_create_user_code(meta: Session, chat_id: int) -> str:
+    """Return the existing link code for *chat_id*, creating one if needed.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        The user's permanent link code string
+    """
+    row = meta.query(UserCode).filter(UserCode.chat_id == chat_id).first()
+    if row:
+        return row.link_code
+    code = secrets.token_urlsafe(6)
+    row = UserCode(chat_id=chat_id, link_code=code)
+    meta.add(row)
+    meta.commit()
+    meta.refresh(row)
+    return row.link_code
+
+
+def regenerate_user_code(meta: Session, chat_id: int) -> str:
+    """Replace the existing link code with a freshly generated one.
+
+    Existing account links are **not** broken — linked users continue to
+    operate on this owner's database.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        The newly generated link code
+    """
+    row = meta.query(UserCode).filter(UserCode.chat_id == chat_id).first()
+    new_code = secrets.token_urlsafe(6)
+    if row:
+        row.link_code = new_code
+    else:
+        row = UserCode(chat_id=chat_id, link_code=new_code)
+        meta.add(row)
+    meta.commit()
+    meta.refresh(row)
+    return row.link_code
+
+
+def link_account(meta: Session, owner_code: str, requester_chat_id: int) -> dict:
+    """Create an account link from *requester_chat_id* to the owner of *owner_code*.
+
+    Args:
+        meta: Metadata database session
+        owner_code: Link code shared by the database owner
+        requester_chat_id: Chat ID of the user who wants to link
+
+    Returns:
+        Dict with ``ok`` (bool) and ``msg`` (str).  On success the dict also
+        contains ``owner_chat_id``.
+    """
+    code_row = meta.query(UserCode).filter(UserCode.link_code == owner_code).first()
+    if not code_row:
+        return {"ok": False, "msg": "invalid_code"}
+
+    if code_row.chat_id == requester_chat_id:
+        return {"ok": False, "msg": "self_link"}
+
+    existing = meta.query(AccountLink).filter(
+        AccountLink.linked_chat_id == requester_chat_id
+    ).first()
+    if existing:
+        return {"ok": False, "msg": "already_linked"}
+
+    link = AccountLink(
+        owner_chat_id=code_row.chat_id,
+        linked_chat_id=requester_chat_id,
+    )
+    meta.add(link)
+    meta.commit()
+    return {"ok": True, "msg": "linked", "owner_chat_id": code_row.chat_id}
+
+
+def unlink_account(meta: Session, chat_id: int) -> dict:
+    """Remove an active account link for *chat_id*.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Chat ID of the linked (non-owner) user
+
+    Returns:
+        Dict with ``ok`` (bool) and ``msg`` (str)
+    """
+    link = meta.query(AccountLink).filter(
+        AccountLink.linked_chat_id == chat_id
+    ).first()
+    if not link:
+        return {"ok": False, "msg": "not_linked"}
+    meta.delete(link)
+    meta.commit()
+    return {"ok": True, "msg": "unlinked"}
+
+
+def resolve_effective_chat_id(meta: Session, chat_id: int) -> int:
+    """Return the effective chat_id whose database should be used.
+
+    If *chat_id* is linked to another user, returns the owner's chat_id.
+    Otherwise returns *chat_id* unchanged.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID to resolve
+
+    Returns:
+        The owner's chat_id if a link exists, else the original chat_id
+    """
+    link = meta.query(AccountLink).filter(
+        AccountLink.linked_chat_id == chat_id
+    ).first()
+    if link:
+        return link.owner_chat_id
+    return chat_id
+
+
+def get_linked_users(meta: Session, owner_chat_id: int) -> list[int]:
+    """Return chat_ids of all users linked to *owner_chat_id*.
+
+    Args:
+        meta: Metadata database session
+        owner_chat_id: Chat ID of the database owner
+
+    Returns:
+        List of linked user chat_ids (may be empty)
+    """
+    links = meta.query(AccountLink).filter(
+        AccountLink.owner_chat_id == owner_chat_id
+    ).all()
+    return [link.linked_chat_id for link in links]

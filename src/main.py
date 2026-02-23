@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .database.models import get_session_for_user
+from .database.models import get_session_for_user, get_metadata_session
 from .database import crud
 from .services.telegram import telegram_bot
 from .services.message_handler import extract_message_text, extract_voice_text
@@ -27,6 +27,28 @@ async def startup_event():
     """Log configuration status on application startup."""
     print(f"📱 Telegram Bot Token configured: {bool(settings.telegram_bot_token)}")
     print(f"🤖 OpenAI API Key configured: {bool(settings.openai_api_key)}")
+
+
+def get_resolved_session(chat_id: int) -> tuple:
+    """Resolve account linking and return the appropriate DB session.
+
+    Checks the shared metadata database for an active account link.  If the
+    user is linked to another user's inventory, the returned session points
+    to the owner's database.
+
+    Args:
+        chat_id: Telegram chat/user ID of the requesting user
+
+    Returns:
+        Tuple of (db_session, effective_chat_id, is_linked)
+    """
+    meta = get_metadata_session()
+    try:
+        effective = crud.resolve_effective_chat_id(meta, chat_id)
+    finally:
+        meta.close()
+    db = get_session_for_user(effective)
+    return db, effective, effective != chat_id
 
 
 @app.get("/health")
@@ -77,7 +99,7 @@ async def _process_telegram_webhook(request: Request):
         chat_id = message["chat"]["id"]
         print(f"💬 Processing message for chat_id: {chat_id}")
 
-        db = get_session_for_user(chat_id)
+        db, effective_chat_id, is_linked = get_resolved_session(chat_id)
 
         try:
             try:
@@ -185,7 +207,7 @@ async def get_inventory(chat_id: int):
     Returns:
         JSON response with all items and total count
     """
-    db = get_session_for_user(chat_id)
+    db, effective_chat_id, is_linked = get_resolved_session(chat_id)
     try:
         items = crud.get_all_items(db)
         return {
@@ -207,7 +229,7 @@ async def get_inventory_summary(chat_id: int):
     Returns:
         JSON response with summary data
     """
-    db = get_session_for_user(chat_id)
+    db, effective_chat_id, is_linked = get_resolved_session(chat_id)
     try:
         return crud.get_inventory_summary(db)
     finally:
@@ -237,7 +259,7 @@ async def agent_process(user_input: str, chat_id: int):
     Returns:
         JSON response with agent response and metadata
     """
-    db = get_session_for_user(chat_id)
+    db, effective_chat_id, is_linked = get_resolved_session(chat_id)
     try:
         result = run_inventory_agent(user_input, db, chat_id)
         return {
@@ -286,7 +308,7 @@ async def agent_voice(request: Request):
         message = payload["message"]
         chat_id = message["chat"]["id"]
 
-        db = get_session_for_user(chat_id)
+        db, effective_chat_id, is_linked = get_resolved_session(chat_id)
         try:
             transcribed_text = await extract_voice_text(message)
             result = run_inventory_agent(transcribed_text, db, chat_id)
