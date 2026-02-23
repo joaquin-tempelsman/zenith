@@ -7,6 +7,10 @@
 		"docs-langchain": {
 			"url": "https://docs.langchain.com/mcp",
 			"type": "http"
+		},
+		"todoist-mcp": {
+			"url": "https://ai.todoist.net/mcp",
+			"type": "http"
 		}
 	},
 	"inputs": []

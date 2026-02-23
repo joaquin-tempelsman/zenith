@@ -8,7 +8,8 @@ from typing import Optional, Union, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..settings import DATE_FORMAT_PYTHON, get_date_format_description
+from ..settings import DATE_FORMAT_PYTHON
+from ..utils import get_date_format_description
 
 
 def validate_date_format(date_str: str) -> str:
@@ -129,7 +130,7 @@ class ListIntentRequest(BaseModel):
         None, description="Group/category name in lowercase (for group/history type)"
     )
     days: Optional[int] = Field(
-        7, description="Number of days for history queries", ge=1
+        360, description="Number of days for history queries", ge=1
     )
 
     @field_validator("item", mode="before")

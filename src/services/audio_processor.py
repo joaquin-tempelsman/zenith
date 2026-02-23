@@ -1,6 +1,5 @@
 """
-AI processing service for audio transcription.
-The main agent logic is now in services/agent.py using LangChain 1.0 create_agent.
+Audio processing service for transcription via OpenAI Whisper.
 """
 from pathlib import Path
 from openai import OpenAI

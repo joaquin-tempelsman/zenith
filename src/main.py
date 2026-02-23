@@ -2,20 +2,17 @@
 FastAPI application entry point.
 Handles Telegram webhook for voice and text-based inventory management.
 """
-import os
-import tempfile
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .database.models import init_db, get_session_for_user
+from .database.models import get_session_for_user
 from .database import crud
-from .services.ai_processor import transcribe_audio
 from .services.telegram import telegram_bot
-from .services.agent import run_inventory_agent
+from .services.message_handler import extract_message_text, extract_voice_text
+from .agent import run_inventory_agent
 from .models import AgentConfig
 
 # Initialize FastAPI app
@@ -25,49 +22,29 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database tables on application startup."""
-    init_db()
-    print("✅ Database initialized successfully")
+    """Log configuration status on application startup."""
     print(f"📱 Telegram Bot Token configured: {bool(settings.telegram_bot_token)}")
     print(f"🤖 OpenAI API Key configured: {bool(settings.openai_api_key)}")
-
-
-@app.get("/")
-async def root():
-    """
-    Root endpoint for health check.
-    
-    Returns:
-        JSON response with API status
-    """
-    return {
-        "status": "online",
-        "service": "Voice-Managed Inventory System",
-        "version": "1.0.0",
-        "endpoints": {
-            "webhook": "/telegram-webhook",
-            "health": "/health"
-        }
-    }
 
 
 @app.get("/health")
 async def health_check():
     """
     Health check endpoint.
-    
+
     Returns:
-        JSON response with system health status
+        JSON response with system health status including
+        service name, version, configuration flags, and timestamp
     """
     return {
         "status": "healthy",
-        "database": "connected",
+        "service": "Voice-Managed Inventory System",
+        "version": "1.0.0",
         "telegram_configured": bool(settings.telegram_bot_token),
         "openai_configured": bool(settings.openai_api_key),
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -78,10 +55,9 @@ async def _process_telegram_webhook(request: Request):
     Workflow:
     1. Receive Telegram payload (voice or text)
     2. Extract chat_id and open a per-user database session
-    3. If voice: Download audio -> Transcribe with Whisper
-    4. If text: Use text directly
-    5. Process with LangChain agent (parse_intent -> modify_db/query_db)
-    6. Reply to user via Telegram
+    3. Extract text via :func:`extract_message_text` (handles voice/text)
+    4. Process with LangChain agent
+    5. Reply to user via Telegram
 
     Args:
         request: FastAPI request object containing Telegram update
@@ -101,59 +77,26 @@ async def _process_telegram_webhook(request: Request):
         chat_id = message["chat"]["id"]
         print(f"💬 Processing message for chat_id: {chat_id}")
 
-        # Open per-user database session; close it when the request is done
         db = get_session_for_user(chat_id)
 
         try:
-            text_input = None
+            try:
+                text_input = await extract_message_text(message)
+            except Exception as e:
+                error_msg = f"❌ Error processing voice message: {str(e)}"
+                await telegram_bot.send_message_async(chat_id, error_msg)
+                return JSONResponse(
+                    {"status": "error", "error": str(e), "type": "voice_processing"}
+                )
 
-            if "voice" in message:
-                try:
-                    voice = message["voice"]
-                    file_id = voice["file_id"]
-
-                    file_info = await telegram_bot.get_file_async(file_id)
-
-                    if not file_info.get("ok"):
-                        raise Exception("Failed to get file info from Telegram")
-
-                    file_path = file_info["result"]["file_path"]
-
-                    temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
-                    temp_dir.mkdir(exist_ok=True)
-
-                    audio_file_path = temp_dir / f"{file_id}.ogg"
-                    download_success = await telegram_bot.download_file_async(
-                        file_path, str(audio_file_path)
-                    )
-
-                    if not download_success:
-                        raise Exception("Failed to download audio file")
-
-                    text_input = transcribe_audio(str(audio_file_path))
-
-                    try:
-                        os.remove(audio_file_path)
-                    except Exception:
-                        pass
-
-                except Exception as e:
-                    error_msg = f"❌ Error processing voice message: {str(e)}"
-                    await telegram_bot.send_message_async(chat_id, error_msg)
-                    return JSONResponse(
-                        {"status": "error", "error": str(e), "type": "voice_processing"}
-                    )
-
-            elif "text" in message:
-                text_input = message["text"]
-                print(f"📝 Received text message: {text_input}")
-
-            else:
+            if text_input is None:
                 print("❌ No text or voice in message")
                 await telegram_bot.send_message_async(
                     chat_id, "❌ Please send either a text or voice message."
                 )
                 return JSONResponse({"ok": True})
+
+            print(f"📝 Input text: {text_input}")
 
             try:
                 print(f"🤖 Processing with agent: {text_input}")
@@ -164,9 +107,7 @@ async def _process_telegram_webhook(request: Request):
                 if not response_message:
                     response_message = "❌ I couldn't process your request. Please try again."
 
-                print(f"📤 Sending response to chat_id {chat_id}: {response_message}")
                 await telegram_bot.send_message_async(chat_id, response_message)
-                print("✅ Response sent successfully")
                 return JSONResponse({"ok": True})
 
             except Exception as e:
@@ -189,20 +130,6 @@ async def _process_telegram_webhook(request: Request):
 async def telegram_webhook(request: Request):
     """
     Telegram webhook endpoint to receive and process messages.
-
-    Args:
-        request: FastAPI request object containing the Telegram update payload
-
-    Returns:
-        JSON response with processing status
-    """
-    return await _process_telegram_webhook(request)
-
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    """
-    Alternative webhook endpoint (alias for /telegram-webhook).
 
     Args:
         request: FastAPI request object containing the Telegram update payload
@@ -337,7 +264,7 @@ async def agent_voice(request: Request):
     Workflow:
     1. Extract chat_id and voice message from Telegram payload
     2. Open per-user database session
-    3. Download and transcribe audio
+    3. Transcribe audio via :func:`extract_voice_text`
     4. Pass transcribed text to agent
     5. Return agent response
 
@@ -358,47 +285,10 @@ async def agent_voice(request: Request):
 
         message = payload["message"]
         chat_id = message["chat"]["id"]
-        file_id = message["voice"]["file_id"]
 
         db = get_session_for_user(chat_id)
         try:
-            # Get file info from Telegram
-            file_info = await telegram_bot.get_file_async(file_id)
-            if not file_info.get("ok"):
-                return {
-                    "status": "error",
-                    "error": "Failed to get file info from Telegram",
-                }
-
-            file_path = file_info["result"]["file_path"]
-
-            # Create temporary directory for audio files
-            temp_dir = Path(tempfile.gettempdir()) / "inventory_audio"
-            temp_dir.mkdir(exist_ok=True)
-
-            # Download audio file
-            audio_file_path = temp_dir / f"{file_id}.ogg"
-            download_success = await telegram_bot.download_file_async(
-                file_path,
-                str(audio_file_path),
-            )
-
-            if not download_success:
-                return {
-                    "status": "error",
-                    "error": "Failed to download audio file",
-                }
-
-            # Transcribe audio to text
-            transcribed_text = transcribe_audio(str(audio_file_path))
-
-            # Clean up audio file
-            try:
-                os.remove(audio_file_path)
-            except Exception:
-                pass
-
-            # Process with agent
+            transcribed_text = await extract_voice_text(message)
             result = run_inventory_agent(transcribed_text, db, chat_id)
 
             return {
@@ -428,16 +318,16 @@ async def agent_health():
         JSON response with agent status
     """
     try:
-        from .services.agent import create_inventory_agent
+        from .agent import create_inventory_agent
 
-        agent = create_inventory_agent()
+        create_inventory_agent()
 
         return {
             "status": "healthy",
             "agent_type": "LangChain 1.0",
             "model": "OpenAI gpt-4o-mini",
             "tools": ["parse_intent", "modify_db", "query_db"],
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
         return {
