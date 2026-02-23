@@ -86,8 +86,8 @@ echo ""
 
 # Check essential files
 check_file "Dockerfile"
-check_file "docker-compose.yml"
-check_file "docker-compose.prod.yml"
+check_file "docker/docker-compose.yml"
+check_file "docker/docker-compose.prod.yml"
 check_file "pyproject.toml"
 check_file ".dockerignore"
 check_file "Makefile"

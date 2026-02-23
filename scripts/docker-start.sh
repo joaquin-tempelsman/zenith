@@ -119,12 +119,12 @@ case $choice in
         
         # Build images
         echo -e "${BLUE}Building production Docker images...${NC}"
-        docker compose -f docker-compose.prod.yml build
-        
+        docker compose -f docker/docker-compose.prod.yml build
+
         # Start services
         echo ""
         echo -e "${BLUE}Starting production services...${NC}"
-        docker compose -f docker-compose.prod.yml up -d
+        docker compose -f docker/docker-compose.prod.yml up -d
         
         # Wait for health check
         echo ""
@@ -149,15 +149,15 @@ case $choice in
         echo "  🎨 Dashboard:   http://localhost:8501"
         echo ""
         echo -e "${BLUE}Useful Commands:${NC}"
-        echo "  View logs:      docker compose -f docker-compose.prod.yml logs -f"
-        echo "  Stop services:  docker compose -f docker-compose.prod.yml down"
-        echo "  Restart:        docker compose -f docker-compose.prod.yml restart"
+        echo "  View logs:      docker compose -f docker/docker-compose.prod.yml logs -f"
+        echo "  Stop services:  docker compose -f docker/docker-compose.prod.yml down"
+        echo "  Restart:        docker compose -f docker/docker-compose.prod.yml restart"
         echo ""
-        
+
         # Ask if user wants to follow logs
         read -p "Follow logs? [y/N]: " follow_logs
         if [[ $follow_logs =~ ^[Yy]$ ]]; then
-            docker compose -f docker-compose.prod.yml logs -f
+            docker compose -f docker/docker-compose.prod.yml logs -f
         fi
         ;;
         

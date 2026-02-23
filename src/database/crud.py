@@ -298,3 +298,70 @@ def get_history(db: Session, days: int, item: Optional[str] = None, group: Optio
         })
     
     return history
+
+def delete_all_items(db: Session) -> int:
+    """
+    Delete all items from the inventory.
+
+    Args:
+        db: Database session
+
+    Returns:
+        Number of items deleted
+    """
+    deleted_count = db.query(Item).delete()
+    db.commit()
+    return deleted_count
+
+
+def create_items_batch(
+    db: Session,
+    items: list[dict],
+) -> list[Item]:
+    """
+    Create multiple items in a single transaction.
+    
+    Args:
+        db: Database session
+        items: List of dicts with keys: name, quantity, category, expire_date (optional)
+        
+    Returns:
+        List of created Item objects
+    """
+    created_items = []
+    for item_data in items:
+        db_item = Item(
+            name=item_data["name"],
+            quantity=item_data.get("quantity", 1),
+            category=item_data.get("category", "general"),
+            expire_date=item_data.get("expire_date"),
+            last_updated=datetime.utcnow()
+        )
+        db.add(db_item)
+        created_items.append(db_item)
+    
+    db.commit()
+    for item in created_items:
+        db.refresh(item)
+    return created_items
+
+
+def delete_items_batch(db: Session, names: list[str]) -> int:
+    """
+    Delete multiple items by name in a single transaction.
+    
+    Args:
+        db: Database session
+        names: List of item names to delete
+        
+    Returns:
+        Number of items deleted
+    """
+    deleted_count = 0
+    for name in names:
+        item = get_item_by_name(db, name)
+        if item:
+            db.delete(item)
+            deleted_count += 1
+    db.commit()
+    return deleted_count

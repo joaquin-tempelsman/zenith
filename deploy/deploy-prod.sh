@@ -44,7 +44,7 @@ git pull origin main || echo "Not a git repository or no remote configured"
 
 echo ""
 echo -e "${YELLOW}Building production images...${NC}"
-docker compose -f docker-compose.prod.yml build --no-cache
+docker compose -f docker/docker-compose.prod.yml build --no-cache
 
 echo ""
 echo -e "${YELLOW}Cleaning up build cache to free disk space...${NC}"
@@ -53,11 +53,11 @@ docker system prune -f
 
 echo ""
 echo -e "${YELLOW}Stopping existing services...${NC}"
-docker compose -f docker-compose.prod.yml down
+docker compose -f docker/docker-compose.prod.yml down
 
 echo ""
 echo -e "${YELLOW}Starting production services...${NC}"
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker/docker-compose.prod.yml up -d
 
 echo ""
 echo -e "${YELLOW}Waiting for services to be healthy...${NC}"
@@ -68,7 +68,7 @@ if curl -f http://localhost:8000/health > /dev/null 2>&1; then
     echo -e "${GREEN}✅ API is healthy!${NC}"
 else
     echo -e "${RED}❌ API health check failed${NC}"
-    docker compose -f docker-compose.prod.yml logs api
+    docker compose -f docker/docker-compose.prod.yml logs api
     exit 1
 fi
 
@@ -82,11 +82,11 @@ echo -e "${GREEN}✅ Production Deployment Complete!${NC}"
 echo "════════════════════════════════════════════════════════"
 echo ""
 echo -e "${BLUE}Service Status:${NC}"
-docker compose -f docker-compose.prod.yml ps
+docker compose -f docker/docker-compose.prod.yml ps
 echo ""
 echo -e "${BLUE}Useful Commands:${NC}"
-echo "  View logs:      docker compose -f docker-compose.prod.yml logs -f"
-echo "  Stop services:  docker compose -f docker-compose.prod.yml down"
-echo "  Restart:        docker compose -f docker-compose.prod.yml restart"
+echo "  View logs:      docker compose -f docker/docker-compose.prod.yml logs -f"
+echo "  Stop services:  docker compose -f docker/docker-compose.prod.yml down"
+echo "  Restart:        docker compose -f docker/docker-compose.prod.yml restart"
 echo ""
 
