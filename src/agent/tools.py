@@ -213,7 +213,7 @@ def modify_db(
     Returns:
         Result message describing the operation outcome
     """
-    from ..settings import parse_date
+    from ..utils import parse_date
 
     db = get_db_session()
     item_name = item.lower().strip()
@@ -370,34 +370,88 @@ def batch_modify_db(
         category: Category for all items (optional)
 
     Returns:
-        Summary of all operations performed
+        Grouped summary listing affected and not-impacted items
     """
     db = get_db_session()
     lang = get_detected_language()
-    results = []
-    success_count = 0
 
     final_category = category.lower().strip() if category else "general"
 
-    for item_name in items:
-        item_name = item_name.lower().strip()
+    affected: list[str] = []
+    not_impacted: list[str] = []
+    failed: list[str] = []
+
+    for raw_name in items:
+        item_name = raw_name.lower().strip()
         if action == "add":
             msg = _add_item(db, item_name, quantity, final_category, None)
         elif action == "remove":
             msg = _remove_item(db, item_name, quantity)
         else:
-            msg = f"❌ Unknown action: {action}"
+            return f"❌ Unknown action: {action}"
 
-        results.append(msg)
-        if not msg.startswith("❌"):
-            success_count += 1
+        if msg.startswith("❌"):
+            failed.append(item_name)
+        elif msg.startswith("ℹ️"):
+            not_impacted.append(item_name)
+        else:
+            affected.append(item_name)
 
-    results_str = "\n".join(results)
-    if lang == "es":
-        header = f"📦 Operación por lotes completada ({success_count}/{len(items)} exitosos):"
-    else:
-        header = f"📦 Batch operation complete ({success_count}/{len(items)} successful):"
-    return f"{header}\n{results_str}"
+    return _format_batch_summary(action, affected, not_impacted, failed, lang)
+
+
+def _format_batch_summary(
+    action: str,
+    affected: list[str],
+    not_impacted: list[str],
+    failed: list[str],
+    lang: str,
+) -> str:
+    """
+    Build a human-readable grouped summary for a batch operation.
+
+    Args:
+        action: 'add' or 'remove'
+        affected: Item names that were successfully modified
+        not_impacted: Item names that were skipped (already exist / not found)
+        failed: Item names that caused errors
+        lang: Language code ('en' or 'es')
+
+    Returns:
+        Formatted multi-line summary string
+    """
+    total = len(affected) + len(not_impacted) + len(failed)
+    is_es = lang == "es"
+
+    action_labels = {
+        "add": ("Agregados", "Added"),
+        "remove": ("Eliminados", "Removed"),
+    }
+    action_label = action_labels.get(action, (action, action))[0 if is_es else 1]
+
+    header = (
+        f"📦 Operación por lotes completada ({len(affected)}/{total}):"
+        if is_es
+        else f"📦 Batch operation complete ({len(affected)}/{total}):"
+    )
+
+    parts = [header]
+
+    if affected:
+        names = ", ".join(affected)
+        parts.append(f"✅ {action_label}: {names}")
+
+    if not_impacted:
+        names = ", ".join(not_impacted)
+        label = "Sin cambios" if is_es else "Not impacted"
+        parts.append(f"ℹ️ {label}: {names}")
+
+    if failed:
+        names = ", ".join(failed)
+        label = "Fallidos" if is_es else "Failed"
+        parts.append(f"❌ {label}: {names}")
+
+    return "\n".join(parts)
 
 
 @tool(args_schema=GetHelpInput)

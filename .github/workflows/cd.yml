@@ -70,7 +70,7 @@ jobs:
           host: ${{ secrets.DO_HOST }}
           username: ${{ secrets.DO_USERNAME }}
           key: ${{ secrets.DO_SSH_KEY }}
-          port: ${{ secrets.DO_SSH_PORT || 22 }}
+          port: ${{ secrets.DO_SSH_PORT != '' && secrets.DO_SSH_PORT || 22 }}
           script: |
             cd /opt/inventory-system
 

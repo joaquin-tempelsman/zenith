@@ -41,21 +41,21 @@ echo ""
 
 # Stop any existing containers
 echo -e "${YELLOW}Stopping existing containers...${NC}"
-docker compose -f docker/docker-compose.yml down
+docker compose -f infrastructure/docker-compose.yml down
 
 # Temporarily rename override file to prevent it from being used in dev
-if [ -f docker/docker-compose.override.yml ]; then
+if [ -f infrastructure/docker-compose.override.yml ]; then
     echo -e "${YELLOW}Temporarily disabling production override...${NC}"
-    mv docker/docker-compose.override.yml docker/docker-compose.override.yml.disabled
+    mv infrastructure/docker-compose.override.yml infrastructure/docker-compose.override.yml.disabled
 fi
 
 echo ""
 echo -e "${YELLOW}Starting services...${NC}"
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f infrastructure/docker-compose.yml up -d
 
 # Restore override file
-if [ -f docker/docker-compose.override.yml.disabled ]; then
-    mv docker/docker-compose.override.yml.disabled docker/docker-compose.override.yml
+if [ -f infrastructure/docker-compose.override.yml.disabled ]; then
+    mv infrastructure/docker-compose.override.yml.disabled infrastructure/docker-compose.override.yml
 fi
 
 echo ""

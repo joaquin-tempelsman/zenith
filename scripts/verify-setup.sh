@@ -86,8 +86,8 @@ echo ""
 
 # Check essential files
 check_file "Dockerfile"
-check_file "docker/docker-compose.yml"
-check_file "docker/docker-compose.prod.yml"
+check_file "infrastructure/docker-compose.yml"
+check_file "infrastructure/docker-compose.prod.yml"
 check_file "pyproject.toml"
 check_file ".dockerignore"
 check_file "Makefile"
@@ -131,10 +131,10 @@ echo ""
 echo -e "${BLUE}Checking Nginx configuration...${NC}"
 echo ""
 
-check_directory "nginx"
-check_file "nginx/nginx.conf"
+check_directory "infrastructure"
+check_file "infrastructure/nginx.conf"
 
-if ! check_directory "nginx/ssl"; then
+if ! check_directory "infrastructure/ssl"; then
     echo -e "${BLUE}   (SSL directory will be created when needed)${NC}"
 fi
 
@@ -148,7 +148,7 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo -e "${BLUE}You're ready to start!${NC}"
     echo ""
     echo "Quick start options:"
-    echo "  1. Using Docker:     ./docker-start.sh"
+    echo "  1. Using Docker:     scripts/docker-start.sh"
     echo "  2. Using Make:       make dev"
     echo "  3. Manual:           docker compose up -d"
     echo ""
