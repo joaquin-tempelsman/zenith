@@ -6,6 +6,7 @@ through the module-level state in agent.state.
 """
 from typing import Optional
 from datetime import date as date_type
+import threading
 
 from langchain_core.tools import tool
 
@@ -19,13 +20,26 @@ from ..models import (
     ResetDatabaseInput,
     BatchModifyDBInput,
     GetHelpInput,
+    GetLinkCodeInput,
+    LinkAccountInput,
+    UnlinkAccountInput,
+    GetLinkStatusInput,
 )
 from .prompts import load_prompt
 from .state import (
     get_db_session,
     get_detected_language,
     set_detected_language,
+    get_meta_session,
+    get_chat_id,
+    set_db_session,
 )
+
+# Lock that serialises all DB-mutating tool calls.
+# LangChain may execute parallel tool calls in separate threads;
+# SQLAlchemy sessions are NOT thread-safe, so we must ensure that only
+# one tool touches the session at a time.
+_db_lock = threading.Lock()
 
 
 # ============================================================================
@@ -53,13 +67,26 @@ def _add_item(
     Returns:
         Result message describing the operation outcome
     """
+    lang = get_detected_language()
+    is_es = lang == "es"
+
     existing = crud.get_item_by_name(db, item_name)
     if existing:
         if quantity:
             updated = crud.update_item_by_name(db, item_name, quantity)
+            if is_es:
+                return (
+                    f"✅ Se agregaron {quantity} a '{item_name}'. "
+                    f"Nueva cantidad: {updated.quantity} en categoría '{updated.category}'"
+                )
             return (
                 f"✅ Added {quantity} to '{item_name}'. "
                 f"New quantity: {updated.quantity} in category '{updated.category}'"
+            )
+        if is_es:
+            return (
+                f"ℹ️ El item '{item_name}' ya existe con cantidad "
+                f"{existing.quantity} en categoría '{existing.category}'"
             )
         return (
             f"ℹ️ Item '{item_name}' already exists with quantity "
@@ -69,6 +96,12 @@ def _add_item(
     final_qty = quantity or 1
     final_category = category.lower().strip() if category else "general"
     item = crud.create_item(db, item_name, final_qty, final_category, parsed_expire_date)
+    if is_es:
+        expire_info = f", vence: {item.expire_date}" if item.expire_date else ""
+        return (
+            f"✅ Nuevo item '{item_name}' creado con cantidad "
+            f"{item.quantity} en categoría '{item.category}'{expire_info}"
+        )
     expire_info = f", expires: {item.expire_date}" if item.expire_date else ""
     return (
         f"✅ Created new item '{item_name}' with quantity "
@@ -88,18 +121,27 @@ def _remove_item(db, item_name: str, quantity: Optional[int]) -> str:
     Returns:
         Result message describing the operation outcome
     """
+    lang = get_detected_language()
+    is_es = lang == "es"
+
     existing = crud.get_item_by_name(db, item_name)
     if not existing:
+        if is_es:
+            return f"❌ Item '{item_name}' no encontrado en el inventario"
         return f"❌ Item '{item_name}' not found in inventory"
 
     if quantity is None:
         old_qty = existing.quantity
         crud.set_item_quantity(db, existing.id, 0)
+        if is_es:
+            return f"✅ Se eliminaron todos los {old_qty} '{item_name}' del inventario"
         return f"✅ Removed all {old_qty} '{item_name}' from inventory"
 
     new_qty = max(0, existing.quantity - quantity)
     removed = existing.quantity - new_qty
     crud.set_item_quantity(db, existing.id, new_qty)
+    if is_es:
+        return f"✅ Se eliminaron {removed} '{item_name}'. Restante: {new_qty}"
     return f"✅ Removed {removed} '{item_name}'. Remaining: {new_qty}"
 
 
@@ -215,28 +257,32 @@ def modify_db(
     """
     from ..utils import parse_date
 
-    db = get_db_session()
-    item_name = item.lower().strip()
+    with _db_lock:
+        db = get_db_session()
+        item_name = item.lower().strip()
 
-    parsed_expire_date = None
-    if expire_date:
-        iso_date = parse_date(expire_date)
-        if iso_date:
-            parsed_expire_date = date_type.fromisoformat(iso_date)
-        else:
-            try:
-                parsed_expire_date = date_type.fromisoformat(expire_date)
-            except ValueError:
-                pass
+        parsed_expire_date = None
+        if expire_date:
+            iso_date = parse_date(expire_date)
+            if iso_date:
+                parsed_expire_date = date_type.fromisoformat(iso_date)
+            else:
+                try:
+                    parsed_expire_date = date_type.fromisoformat(expire_date)
+                except ValueError:
+                    pass
 
-    _dispatch = {
-        "add": lambda: _add_item(db, item_name, quantity, category, parsed_expire_date),
-        "remove": lambda: _remove_item(db, item_name, quantity),
-    }
-    handler = _dispatch.get(action)
-    if handler is None:
-        return f"❌ Unknown action: {action}"
-    return handler()
+        _dispatch = {
+            "add": lambda: _add_item(db, item_name, quantity, category, parsed_expire_date),
+            "remove": lambda: _remove_item(db, item_name, quantity),
+        }
+        handler = _dispatch.get(action)
+        if handler is None:
+            lang = get_detected_language()
+            if lang == "es":
+                return f"❌ Acción desconocida: {action}"
+            return f"❌ Unknown action: {action}"
+        return handler()
 
 
 @tool(args_schema=QueryDBInput)
@@ -258,64 +304,90 @@ def query_db(
     Returns:
         Formatted query results
     """
-    db = get_db_session()
-    if item:
-        item = item.lower().strip()
-    if group:
-        group = group.lower().strip()
+    with _db_lock:
+        db = get_db_session()
+        lang = get_detected_language()
+        is_es = lang == "es"
 
-    if list_type == "expire":
-        items = crud.get_items_by_expiration(db)
-        if not items:
-            return "ℹ️ No items with expiration dates found"
-        items_list = "\n".join([f"- {r['name']}: {r['expire_date']}" for r in items[:10]])
-        return f"📅 Items by expiration (soonest first):\n{items_list}"
+        if item:
+            item = item.lower().strip()
+        if group:
+            group = group.lower().strip()
 
-    if list_type == "group":
-        if not group:
-            return "❌ Group/category name is required for group queries"
-        items = crud.get_items_by_category(db, group)
-        if not items:
-            return f"ℹ️ No items found in '{group}' category"
-        items_list = "\n".join(
-            [f"- {i.name}: {i.quantity} units" for i in items[:10]]
-        )
-        return f"📦 Items in '{group}' category:\n{items_list}"
+        if list_type == "expire":
+            items = crud.get_items_by_expiration(db)
+            if not items:
+                return "ℹ️ No se encontraron items con fecha de vencimiento" if is_es else "ℹ️ No items with expiration dates found"
+            items_list = "\n".join([f"- {r['name']}: {r['expire_date']}" for r in items[:10]])
+            header = "📅 Items por vencimiento (más próximo primero):" if is_es else "📅 Items by expiration (soonest first):"
+            return f"{header}\n{items_list}"
 
-    if list_type == "item":
-        if not item:
-            return "❌ Item name is required for item queries"
-        item_obj = crud.get_item_by_name(db, item)
-        if not item_obj:
-            return f"❌ Item '{item}' not found in inventory"
-        expire_info = f", Expires: {item_obj.expire_date}" if item_obj.expire_date else ""
-        return (
-            f"📊 {item_obj.name}: {item_obj.quantity} units in stock "
-            f"(Category: {item_obj.category}{expire_info})"
-        )
+        if list_type == "group":
+            if not group:
+                return "❌ Se requiere nombre de grupo/categoría para consultas por grupo" if is_es else "❌ Group/category name is required for group queries"
+            items = crud.get_items_by_category(db, group)
+            if not items:
+                return (f"ℹ️ No se encontraron items en la categoría '{group}'" if is_es
+                        else f"ℹ️ No items found in '{group}' category")
+            unit = "unidades" if is_es else "units"
+            items_list = "\n".join(
+                [f"- {i.name}: {i.quantity} {unit}" for i in items[:10]]
+            )
+            header = f"📦 Items en categoría '{group}':" if is_es else f"📦 Items in '{group}' category:"
+            return f"{header}\n{items_list}"
 
-    if list_type == "history":
-        history = crud.get_history(db, days or 7, item, group)
-        target = item or group or "all items"
-        if not history:
-            return f"ℹ️ No history found for {target} in the last {days} days"
-        history_list = "\n".join(
-            [f"- {h['date']}: {h['action']} {h['quantity']} {h['item']}" for h in history[:10]]
-        )
-        return f"📜 History for {target} (last {days} days):\n{history_list}"
+        if list_type == "item":
+            if not item:
+                return "❌ Se requiere nombre del item para consultas por item" if is_es else "❌ Item name is required for item queries"
+            item_obj = crud.get_item_by_name(db, item)
+            if not item_obj:
+                return (f"❌ Item '{item}' no encontrado en el inventario" if is_es
+                        else f"❌ Item '{item}' not found in inventory")
+            if is_es:
+                expire_info = f", Vence: {item_obj.expire_date}" if item_obj.expire_date else ""
+                return (
+                    f"📊 {item_obj.name}: {item_obj.quantity} unidades en stock "
+                    f"(Categoría: {item_obj.category}{expire_info})"
+                )
+            expire_info = f", Expires: {item_obj.expire_date}" if item_obj.expire_date else ""
+            return (
+                f"📊 {item_obj.name}: {item_obj.quantity} units in stock "
+                f"(Category: {item_obj.category}{expire_info})"
+            )
 
-    if list_type == "summary":
-        summary = crud.get_inventory_summary(db)
-        cats = summary["categories"]
-        cats_str = ", ".join(cats) if cats else "none"
-        return (
-            f"📊 Inventory Summary:\n"
-            f"- Unique items: {summary['total_items']}\n"
-            f"- Total quantity: {summary['total_quantity']}\n"
-            f"- Categories ({len(cats)}): {cats_str}"
-        )
+        if list_type == "history":
+            history = crud.get_history(db, days or 7, item, group)
+            target = item or group or ("todos los items" if is_es else "all items")
+            if not history:
+                return (f"ℹ️ No se encontró historial para {target} en los últimos {days} días" if is_es
+                        else f"ℹ️ No history found for {target} in the last {days} days")
+            history_list = "\n".join(
+                [f"- {h['date']}: {h['action']} {h['quantity']} {h['item']}" for h in history[:10]]
+            )
+            header = (f"📜 Historial de {target} (últimos {days} días):" if is_es
+                      else f"📜 History for {target} (last {days} days):")
+            return f"{header}\n{history_list}"
 
-    return f"❌ Unknown list_type: {list_type}"
+        if list_type == "summary":
+            summary = crud.get_inventory_summary(db)
+            cats = summary["categories"]
+            cats_str = ", ".join(cats) if cats else ("ninguna" if is_es else "none")
+            if is_es:
+                return (
+                    f"📊 Resumen del Inventario:\n"
+                    f"- Items únicos: {summary['total_items']}\n"
+                    f"- Cantidad total: {summary['total_quantity']}\n"
+                    f"- Categorías ({len(cats)}): {cats_str}"
+                )
+            return (
+                f"📊 Inventory Summary:\n"
+                f"- Unique items: {summary['total_items']}\n"
+                f"- Total quantity: {summary['total_quantity']}\n"
+                f"- Categories ({len(cats)}): {cats_str}"
+            )
+
+        return (f"❌ Tipo de lista desconocido: {list_type}" if is_es
+                else f"❌ Unknown list_type: {list_type}")
 
 
 
@@ -343,8 +415,9 @@ def reset_database(confirmation: str) -> str:
             return "⚠️ Operación cancelada. Para reiniciar la base de datos, el usuario debe confirmar explícitamente diciendo 'OK'."
         return "⚠️ Operation cancelled. To reset the database, the user must explicitly confirm by saying 'OK'."
 
-    db = get_db_session()
-    count = crud.delete_all_items(db)
+    with _db_lock:
+        db = get_db_session()
+        count = crud.delete_all_items(db)
 
     if lang == "es":
         return f"🗑️ Base de datos reiniciada. Se eliminaron {count} items del inventario."
@@ -372,30 +445,31 @@ def batch_modify_db(
     Returns:
         Grouped summary listing affected and not-impacted items
     """
-    db = get_db_session()
-    lang = get_detected_language()
+    with _db_lock:
+        db = get_db_session()
+        lang = get_detected_language()
 
-    final_category = category.lower().strip() if category else "general"
+        final_category = category.lower().strip() if category else "general"
 
-    affected: list[str] = []
-    not_impacted: list[str] = []
-    failed: list[str] = []
+        affected: list[str] = []
+        not_impacted: list[str] = []
+        failed: list[str] = []
 
-    for raw_name in items:
-        item_name = raw_name.lower().strip()
-        if action == "add":
-            msg = _add_item(db, item_name, quantity, final_category, None)
-        elif action == "remove":
-            msg = _remove_item(db, item_name, quantity)
-        else:
-            return f"❌ Unknown action: {action}"
+        for raw_name in items:
+            item_name = raw_name.lower().strip()
+            if action == "add":
+                msg = _add_item(db, item_name, quantity, final_category, None)
+            elif action == "remove":
+                msg = _remove_item(db, item_name, quantity)
+            else:
+                return f"❌ Unknown action: {action}"
 
-        if msg.startswith("❌"):
-            failed.append(item_name)
-        elif msg.startswith("ℹ️"):
-            not_impacted.append(item_name)
-        else:
-            affected.append(item_name)
+            if msg.startswith("❌"):
+                failed.append(item_name)
+            elif msg.startswith("ℹ️"):
+                not_impacted.append(item_name)
+            else:
+                affected.append(item_name)
 
     return _format_batch_summary(action, affected, not_impacted, failed, lang)
 
@@ -498,3 +572,174 @@ def get_help(topic: Optional[str] = None) -> str:
 🔹 **Reset database** – "Reset database" (requires OK)
 
 💡 **Tip:** You can speak naturally, the bot understands English and Spanish."""
+
+
+# ============================================================================
+# Account Linking Tools
+# ============================================================================
+
+
+@tool(args_schema=GetLinkCodeInput)
+def get_my_link_code(dummy: Optional[str] = None) -> str:
+    """Return the unique link code for the current user.
+
+    The code is permanent and can be shared with other users so they can
+    link their account to this user's inventory database.
+
+    Args:
+        dummy: Unused placeholder
+
+    Returns:
+        Message containing the user's link code
+    """
+    from ..database import crud as _crud
+
+    meta = get_meta_session()
+    chat_id = get_chat_id()
+    lang = get_detected_language()
+    code = _crud.get_or_create_user_code(meta, chat_id)
+
+    if lang == "es":
+        return (
+            f"🔑 Tu código de vinculación es: **{code}**\n"
+            "Compartí este código con otro usuario para que pueda vincular su cuenta a tu inventario."
+        )
+    return (
+        f"🔑 Your link code is: **{code}**\n"
+        "Share this code with another user so they can link their account to your inventory."
+    )
+
+
+@tool(args_schema=LinkAccountInput)
+def link_account(code: str) -> str:
+    """Link the current user's account to another user's inventory database.
+
+    After linking, all inventory operations will read/write the owner's
+    database instead of the caller's own database.
+
+    Args:
+        code: Link code provided by the account owner
+
+    Returns:
+        Success or error message
+    """
+    from ..database import crud as _crud
+    from ..database.models import get_session_for_user
+
+    meta = get_meta_session()
+    chat_id = get_chat_id()
+    lang = get_detected_language()
+    is_es = lang == "es"
+
+    result = _crud.link_account(meta, code.strip(), chat_id)
+
+    if not result["ok"]:
+        messages = {
+            "invalid_code": (
+                "❌ Código inválido. Verificá el código e intentá de nuevo.",
+                "❌ Invalid code. Please check the code and try again.",
+            ),
+            "self_link": (
+                "❌ No podés vincular tu cuenta a vos mismo.",
+                "❌ You cannot link your account to yourself.",
+            ),
+            "already_linked": (
+                "❌ Tu cuenta ya está vinculada a otro usuario. Desvinculá primero con 'desvincular cuenta'.",
+                "❌ Your account is already linked to another user. Unlink first with 'unlink account'.",
+            ),
+        }
+        msg_pair = messages.get(result["msg"], ("❌ Error desconocido.", "❌ Unknown error."))
+        return msg_pair[0] if is_es else msg_pair[1]
+
+    # Swap DB session to the owner's database immediately
+    owner_chat_id = result["owner_chat_id"]
+    new_db = get_session_for_user(owner_chat_id)
+    set_db_session(new_db)
+
+    if is_es:
+        return "✅ ¡Cuenta vinculada exitosamente! Ahora estás trabajando en el inventario compartido."
+    return "✅ Account linked successfully! You are now working on the shared inventory."
+
+
+@tool(args_schema=UnlinkAccountInput)
+def unlink_account(dummy: Optional[str] = None) -> str:
+    """Unlink the current user from a shared inventory and return to their own database.
+
+    Args:
+        dummy: Unused placeholder
+
+    Returns:
+        Success or error message
+    """
+    from ..database import crud as _crud
+    from ..database.models import get_session_for_user
+
+    meta = get_meta_session()
+    chat_id = get_chat_id()
+    lang = get_detected_language()
+    is_es = lang == "es"
+
+    result = _crud.unlink_account(meta, chat_id)
+
+    if not result["ok"]:
+        if is_es:
+            return "ℹ️ Tu cuenta no está vinculada a ningún otro usuario."
+        return "ℹ️ Your account is not linked to any other user."
+
+    # Swap DB session back to caller's own database
+    own_db = get_session_for_user(chat_id)
+    set_db_session(own_db)
+
+    if is_es:
+        return "✅ Cuenta desvinculada. Ahora estás trabajando en tu propio inventario."
+    return "✅ Account unlinked. You are now working on your own inventory."
+
+
+@tool(args_schema=GetLinkStatusInput)
+def get_link_status(dummy: Optional[str] = None) -> str:
+    """Show the current account linking status for the user.
+
+    Reports whether the user is linked to someone else's inventory, and
+    how many users are linked to the user's own inventory.
+
+    Args:
+        dummy: Unused placeholder
+
+    Returns:
+        Formatted status message
+    """
+    from ..database import crud as _crud
+
+    meta = get_meta_session()
+    chat_id = get_chat_id()
+    lang = get_detected_language()
+    is_es = lang == "es"
+
+    # Check if this user is linked to someone
+    effective = _crud.resolve_effective_chat_id(meta, chat_id)
+    linked_to_other = effective != chat_id
+
+    # Check how many are linked to this user
+    linked_users = _crud.get_linked_users(meta, chat_id)
+    count = len(linked_users)
+
+    parts: list[str] = []
+
+    if linked_to_other:
+        if is_es:
+            parts.append("🔗 Tu cuenta está vinculada al inventario de otro usuario.")
+        else:
+            parts.append("🔗 Your account is linked to another user's inventory.")
+    else:
+        if is_es:
+            parts.append("🔓 Tu cuenta no está vinculada a nadie. Estás usando tu propio inventario.")
+        else:
+            parts.append("🔓 Your account is not linked to anyone. You are using your own inventory.")
+
+    if count:
+        if is_es:
+            parts.append(f"👥 {count} usuario(s) están vinculados a tu inventario.")
+        else:
+            parts.append(f"👥 {count} user(s) are linked to your inventory.")
+
+    return "\n".join(parts)

@@ -16,7 +16,10 @@ from .prompts import Language, load_prompt
 from .state import (
     set_db_session,
     set_chat_id,
+    set_meta_session,
     get_detected_language,
+    get_chat_history,
+    append_chat_history,
 )
 from .tools import (
     detect_language,
@@ -26,6 +29,10 @@ from .tools import (
     batch_modify_db,
     reset_database,
     get_help,
+    get_my_link_code,
+    link_account,
+    unlink_account,
+    get_link_status,
 )
 
 
@@ -87,7 +94,11 @@ def create_inventory_agent(config: Optional[AgentConfig] = None, language: Langu
 
     return create_agent(
         model=config.agent_model,
-        tools=[detect_language, parse_intent, modify_db, query_db, batch_modify_db, reset_database, get_help],
+        tools=[
+            detect_language, parse_intent, modify_db, query_db,
+            batch_modify_db, reset_database, get_help,
+            get_my_link_code, link_account, unlink_account, get_link_status,
+        ],
         system_prompt=system_prompt,
         middleware=middleware,
         debug=config.agent_debug,
@@ -125,11 +136,15 @@ def run_inventory_agent(user_input: str, db: Session, chat_id: int) -> dict[str,
             tools_used (list[str]): Names of tools called during execution
             metadata (dict): Extra info including detected language and chat_id
     """
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, AIMessage
     from langchain_core.runnables import RunnableConfig
+    from ..database.models import get_metadata_session
 
     set_db_session(db)
     set_chat_id(chat_id)
+
+    meta = get_metadata_session()
+    set_meta_session(meta)
 
     # Pre-detect language so the system prompt is in the right language
     detect_language.invoke({"user_message": user_input})
@@ -137,12 +152,17 @@ def run_inventory_agent(user_input: str, db: Session, chat_id: int) -> dict[str,
 
     agent = create_inventory_agent(language=language)
 
+    # Build message list: prior history + current user message
+    history = get_chat_history(chat_id)
+    current_message = HumanMessage(content=user_input)
+    all_messages = history + [current_message]
+
     run_config = RunnableConfig(
         configurable={"thread_id": str(chat_id)},
         metadata={"chat_id": str(chat_id), "session_id": str(chat_id)},
         tags=[f"user:{chat_id}"],
     )
-    result = agent.invoke({"messages": [HumanMessage(content=user_input)]}, run_config)
+    result = agent.invoke({"messages": all_messages}, run_config)
 
     messages = result.get("messages", [])
     response_text = ""
@@ -158,6 +178,9 @@ def run_inventory_agent(user_input: str, db: Session, chat_id: int) -> dict[str,
                 tool_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
                 if tool_name:
                     tools_used.append(tool_name)
+
+    # Persist the user message and the AI reply for future context
+    append_chat_history(chat_id, [current_message, AIMessage(content=response_text)])
 
     return {
         "result": "success",

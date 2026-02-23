@@ -5,16 +5,20 @@ Defines the Items table for the inventory system.
 Supports per-user SQLite databases: each Telegram user gets their own
 .db file derived from the base DATABASE_URL directory.
 """
+import secrets
 from pathlib import Path
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, DateTime, Date, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from ..config import settings
 
-# Create SQLAlchemy Base
+# Create SQLAlchemy Base (per-user inventory tables)
 Base = declarative_base()
+
+# Separate base for shared metadata tables (account linking)
+MetadataBase = declarative_base()
 
 
 class Item(Base):
@@ -56,6 +60,110 @@ class Item(Base):
             "expire_date": self.expire_date.isoformat() if self.expire_date else None,
             "last_updated": self.last_updated.isoformat() if self.last_updated else None
         }
+
+
+# ---------------------------------------------------------------------------
+# Shared metadata models (account linking)
+# ---------------------------------------------------------------------------
+
+
+class UserCode(MetadataBase):
+    """Stores the permanent link code assigned to each user.
+
+    Attributes:
+        chat_id: Telegram chat/user ID (primary key)
+        link_code: Unique URL-safe token used for account linking
+        created_at: Timestamp when the code was first generated
+    """
+
+    __tablename__ = "user_codes"
+
+    chat_id = Column(Integer, primary_key=True)
+    link_code = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    links = relationship("AccountLink", back_populates="owner", foreign_keys="AccountLink.owner_chat_id")
+
+    def __repr__(self):
+        return f"<UserCode(chat_id={self.chat_id}, link_code='{self.link_code}')>"
+
+
+class AccountLink(MetadataBase):
+    """Maps a linked user to an owner whose database they share.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        owner_chat_id: Chat ID of the database owner
+        linked_chat_id: Chat ID of the user operating on the owner's DB (unique)
+        created_at: Timestamp when the link was established
+    """
+
+    __tablename__ = "account_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_chat_id = Column(Integer, ForeignKey("user_codes.chat_id"), nullable=False)
+    linked_chat_id = Column(Integer, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("UserCode", back_populates="links", foreign_keys=[owner_chat_id])
+
+    def __repr__(self):
+        return f"<AccountLink(owner={self.owner_chat_id}, linked={self.linked_chat_id})>"
+
+
+# ---------------------------------------------------------------------------
+# Metadata (shared) database helpers
+# ---------------------------------------------------------------------------
+
+_metadata_engine: Engine | None = None
+
+
+def _get_metadata_db_path() -> Path:
+    """Return the path for the shared metadata SQLite database.
+
+    The file is placed alongside the per-user inventory databases.
+
+    Returns:
+        Absolute Path to ``metadata.db``
+    """
+    raw_path = settings.database_url.replace("sqlite:///", "")
+    base_dir = Path(raw_path).parent
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return base_dir / "metadata.db"
+
+
+def get_metadata_engine() -> Engine:
+    """Return a cached SQLAlchemy engine for the shared metadata database.
+
+    On first call the engine is created and the metadata schema is
+    initialised (tables created if absent).
+
+    Returns:
+        SQLAlchemy Engine connected to ``metadata.db``
+    """
+    global _metadata_engine
+    if _metadata_engine is None:
+        db_path = _get_metadata_db_path()
+        _metadata_engine = create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={"check_same_thread": False},
+            echo=False,
+        )
+        MetadataBase.metadata.create_all(bind=_metadata_engine)
+    return _metadata_engine
+
+
+def get_metadata_session() -> Session:
+    """Create and return a new session for the shared metadata database.
+
+    Callers are responsible for closing the session when done.
+
+    Returns:
+        New SQLAlchemy Session bound to the metadata engine
+    """
+    engine = get_metadata_engine()
+    factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    return factory()
 
 
 # ---------------------------------------------------------------------------

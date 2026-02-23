@@ -135,3 +135,62 @@ class GetHelpInput(BaseModel):
         None, description="Specific topic to get help on (optional)"
     )
 
+
+# ---------------------------------------------------------------------------
+# Account linking schemas
+# ---------------------------------------------------------------------------
+
+
+class GetLinkCodeInput(BaseModel):
+    """Input schema for the get_my_link_code tool.
+
+    No user input is required; the tool uses the chat_id from agent state.
+
+    Attributes:
+        dummy: Unused placeholder (LangChain requires at least one field)
+    """
+
+    dummy: Optional[str] = Field(
+        None, description="Unused – the tool requires no user input"
+    )
+
+
+class LinkAccountInput(BaseModel):
+    """Input schema for the link_account tool.
+
+    Attributes:
+        code: The link code provided by the account owner
+    """
+
+    code: str = Field(
+        ..., description="The link code shared by the account owner"
+    )
+
+
+class UnlinkAccountInput(BaseModel):
+    """Input schema for the unlink_account tool.
+
+    No user input is required; the tool uses the chat_id from agent state.
+
+    Attributes:
+        dummy: Unused placeholder (LangChain requires at least one field)
+    """
+
+    dummy: Optional[str] = Field(
+        None, description="Unused – the tool requires no user input"
+    )
+
+
+class GetLinkStatusInput(BaseModel):
+    """Input schema for the get_link_status tool.
+
+    No user input is required; the tool uses the chat_id from agent state.
+
+    Attributes:
+        dummy: Unused placeholder (LangChain requires at least one field)
+    """
+
+    dummy: Optional[str] = Field(
+        None, description="Unused – the tool requires no user input"
+    )
+

@@ -21,6 +21,10 @@ from .tool_schemas import (
     ResetDatabaseInput,
     BatchModifyDBInput,
     GetHelpInput,
+    GetLinkCodeInput,
+    LinkAccountInput,
+    UnlinkAccountInput,
+    GetLinkStatusInput,
 )
 
 __all__ = [
@@ -38,5 +42,9 @@ __all__ = [
     "ResetDatabaseInput",
     "BatchModifyDBInput",
     "GetHelpInput",
+    "GetLinkCodeInput",
+    "LinkAccountInput",
+    "UnlinkAccountInput",
+    "GetLinkStatusInput",
 ]
 

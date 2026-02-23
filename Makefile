@@ -43,23 +43,26 @@ help:
 	@echo "  make ps           - Show running containers"
 	@echo ""
 
+# Docker Compose base command with env file from project root
+DC = docker compose --env-file .env -f infrastructure/docker-compose.yml
+
 # Development commands
 dev: build up-dev
 
 build:
 	@echo "🔨 Building Docker images..."
-	docker compose -f infrastructure/docker-compose.yml build
+	$(DC) build
 
 up:
 	@echo "🚀 Starting development services..."
-	docker compose -f infrastructure/docker-compose.yml up -d
+	$(DC) up -d
 	@echo "✅ Services started!"
 	@echo "📱 API: http://localhost:8000"
 	@echo "🎨 Dashboard: http://localhost:8501"
 
 up-dev:
 	@echo "🚀 Starting development services with ngrok..."
-	docker compose -f infrastructure/docker-compose.yml --profile dev up -d
+	$(DC) --profile dev up -d
 	@echo ""
 	@echo "⏳ Waiting for webhook setup..."
 	@sleep 5
@@ -76,24 +79,24 @@ up-dev:
 
 down:
 	@echo "🛑 Stopping services..."
-	docker compose -f infrastructure/docker-compose.yml down
+	$(DC) down
 
 logs:
-	docker compose -f infrastructure/docker-compose.yml logs -f
+	$(DC) logs -f
 
 logs-api:
-	docker compose -f infrastructure/docker-compose.yml logs -f api
+	$(DC) logs -f api
 
 logs-dash:
-	docker compose -f infrastructure/docker-compose.yml logs -f dashboard
+	$(DC) logs -f dashboard
 
 restart:
 	@echo "🔄 Restarting services..."
-	docker compose -f infrastructure/docker-compose.yml restart
+	$(DC) restart
 
 clean:
 	@echo "🧹 Cleaning up..."
-	docker compose -f infrastructure/docker-compose.yml down -v
+	$(DC) down -v
 	docker system prune -f
 
 # Production commands
@@ -139,7 +142,7 @@ format:
 # Database commands
 db-init:
 	@echo "🗄️  Initializing database..."
-	docker compose -f infrastructure/docker-compose.yml exec api python -c "from src.database.models import init_db; init_db(); print('✅ Database initialized')"
+	$(DC) exec api python -c "from src.database.models import init_db; init_db(); print('✅ Database initialized')"
 
 db-backup:
 	@echo "💾 Backing up database..."
@@ -150,7 +153,7 @@ db-backup:
 # Utilities
 shell:
 	@echo "🐚 Opening shell in API container..."
-	docker compose -f infrastructure/docker-compose.yml exec api /bin/bash
+	$(DC) exec api /bin/bash
 
 health:
 	@echo "❤️  Checking application health..."
@@ -158,7 +161,7 @@ health:
 
 ps:
 	@echo "📊 Running containers:"
-	docker compose -f infrastructure/docker-compose.yml ps
+	$(DC) ps
 
 # Setup commands
 setup:

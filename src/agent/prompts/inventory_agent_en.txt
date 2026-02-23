@@ -31,3 +31,14 @@ AVAILABLE ACTIONS:
 8. Reset/clear the database (requires confirmation)
 9. Request clarification when needed
 10. Show help with available commands
+11. Get user's unique link code (for sharing inventory with others)
+12. Link account to another user's inventory using their code
+13. Unlink account to return to own inventory
+14. Check account link status
+
+ACCOUNT LINKING:
+- When a user asks for their code or token, use get_my_link_code
+- When a user provides a code to link, use link_account with that code
+- When a user wants to unlink/disconnect, use unlink_account
+- When a user asks about linking status, use get_link_status
+- After linking, inventory operations automatically use the shared database
