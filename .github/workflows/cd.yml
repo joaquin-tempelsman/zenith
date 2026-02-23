@@ -78,14 +78,14 @@ jobs:
             git pull origin main
 
             # Restart services with both compose files
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+            docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml down
+            docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml up -d --build
 
             # Clean up old images
             docker image prune -af
 
             # Show status
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+            docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml ps
 
       - name: Verify deployment
         run: |
