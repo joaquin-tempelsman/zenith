@@ -62,6 +62,39 @@ class Settings(BaseSettings):
     langsmith_endpoint: str = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
     langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "default")
 
+    # Access Control Configuration
+    @property
+    def allowed_users_only(self) -> bool:
+        """Whether to restrict bot access to authorized users only.
+
+        Selects the appropriate flag based on environment:
+        - production: ALLOWED_USERS_ONLY_PROD
+        - development: ALLOWED_USERS_ONLY_DEV
+
+        Returns:
+            True if access restriction is enabled.
+        """
+        if self.environment == "production":
+            val = os.getenv("ALLOWED_USERS_ONLY_PROD", "false")
+        else:
+            val = os.getenv("ALLOWED_USERS_ONLY_DEV", "false")
+        return val.lower() in ("true", "1", "yes")
+
+    @property
+    def secret_code(self) -> str:
+        """Secret code users must provide to gain authorized access.
+
+        Selects the appropriate code based on environment:
+        - production: SECRET_CODE_PROD
+        - development: SECRET_CODE_DEV
+
+        Returns:
+            The secret code string for the current environment.
+        """
+        if self.environment == "production":
+            return os.getenv("SECRET_CODE_PROD", "")
+        return os.getenv("SECRET_CODE_DEV", "")
+
     class Config:
         env_file = ".env"
         case_sensitive = False

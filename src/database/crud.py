@@ -4,10 +4,10 @@ Handles all database interactions for the inventory system.
 """
 import secrets
 from typing import List, Optional, Dict, Any
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from .models import Item, UserCode, AccountLink
+from .models import Item, UserCode, AccountLink, AuthorizedUser
 
 
 def get_item_by_id(db: Session, item_id: int) -> Optional[Item]:
@@ -86,7 +86,7 @@ def create_item(db: Session, name: str, quantity: int, category: str, expire_dat
         quantity=quantity,
         category=category,
         expire_date=expire_date,
-        last_updated=datetime.utcnow()
+        last_updated=datetime.now(timezone.utc)
     )
     db.add(db_item)
     db.commit()
@@ -109,7 +109,7 @@ def update_item_quantity(db: Session, item_id: int, quantity_change: int) -> Opt
     db_item = get_item_by_id(db, item_id)
     if db_item:
         db_item.quantity += quantity_change
-        db_item.last_updated = datetime.utcnow()
+        db_item.last_updated = datetime.now(timezone.utc)
         db.commit()
         db.refresh(db_item)
     return db_item
@@ -130,7 +130,7 @@ def update_item_by_name(db: Session, name: str, quantity_change: int) -> Optiona
     db_item = get_item_by_name(db, name)
     if db_item:
         db_item.quantity += quantity_change
-        db_item.last_updated = datetime.utcnow()
+        db_item.last_updated = datetime.now(timezone.utc)
         db.commit()
         db.refresh(db_item)
     return db_item
@@ -151,7 +151,7 @@ def set_item_quantity(db: Session, item_id: int, quantity: int) -> Optional[Item
     db_item = get_item_by_id(db, item_id)
     if db_item:
         db_item.quantity = quantity
-        db_item.last_updated = datetime.utcnow()
+        db_item.last_updated = datetime.now(timezone.utc)
         db.commit()
         db.refresh(db_item)
     return db_item
@@ -274,9 +274,7 @@ def get_history(db: Session, days: int, item: Optional[str] = None, group: Optio
     Returns:
         List of history records
     """
-    from datetime import datetime, timedelta
-    
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
     
     query = db.query(Item).filter(Item.last_updated >= cutoff_date)
     
@@ -336,7 +334,7 @@ def create_items_batch(
             quantity=item_data.get("quantity", 1),
             category=item_data.get("category", "general"),
             expire_date=item_data.get("expire_date"),
-            last_updated=datetime.utcnow()
+            last_updated=datetime.now(timezone.utc)
         )
         db.add(db_item)
         created_items.append(db_item)
@@ -508,3 +506,99 @@ def get_linked_users(meta: Session, owner_chat_id: int) -> list[int]:
         AccountLink.owner_chat_id == owner_chat_id
     ).all()
     return [link.linked_chat_id for link in links]
+
+
+# ---------------------------------------------------------------------------
+# Access control CRUD
+# ---------------------------------------------------------------------------
+
+MAX_ACCESS_ATTEMPTS = 5
+
+
+def is_user_authorized(meta: Session, chat_id: int) -> bool:
+    """Check whether a user has been granted authorized access.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        True if the user has already provided the correct secret code.
+    """
+    row = meta.query(AuthorizedUser).filter(AuthorizedUser.chat_id == chat_id).first()
+    return row is not None and bool(row.is_authorized)
+
+
+def authorize_user(meta: Session, chat_id: int) -> None:
+    """Mark a user as authorized after they provide the correct secret code.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+    """
+    row = meta.query(AuthorizedUser).filter(AuthorizedUser.chat_id == chat_id).first()
+    if row:
+        row.is_authorized = 1
+        row.authorized_at = datetime.now(timezone.utc)
+    else:
+        row = AuthorizedUser(
+            chat_id=chat_id,
+            is_authorized=1,
+            authorized_at=datetime.now(timezone.utc),
+        )
+        meta.add(row)
+    meta.commit()
+
+
+def get_failed_attempts(meta: Session, chat_id: int) -> int:
+    """Return the number of failed access attempts for a user.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        Number of failed attempts (0 if user has no record).
+    """
+    row = meta.query(AuthorizedUser).filter(AuthorizedUser.chat_id == chat_id).first()
+    if row is None:
+        return 0
+    return row.attempts
+
+
+def increment_failed_attempts(meta: Session, chat_id: int) -> int:
+    """Record a failed access attempt and return the new total.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        Updated number of failed attempts.
+    """
+    row = meta.query(AuthorizedUser).filter(AuthorizedUser.chat_id == chat_id).first()
+    if row:
+        row.attempts += 1
+    else:
+        row = AuthorizedUser(chat_id=chat_id, attempts=1)
+        meta.add(row)
+    meta.commit()
+    meta.refresh(row)
+    return row.attempts
+
+
+def is_user_blocked(meta: Session, chat_id: int) -> bool:
+    """Check whether a user has exhausted their access attempts.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        True if the user has reached or exceeded MAX_ACCESS_ATTEMPTS
+        without providing the correct code.
+    """
+    row = meta.query(AuthorizedUser).filter(AuthorizedUser.chat_id == chat_id).first()
+    if row is None:
+        return False
+    return not bool(row.is_authorized) and row.attempts >= MAX_ACCESS_ATTEMPTS
