@@ -1,0 +1,140 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend Service
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: inventory-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
+      - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
+      - DATABASE_URL=sqlite:///./data/inventory.db
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD must be set in .env}
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-inventory-system}
+    volumes:
+      - ../data:/app/data
+      - ../src:/app/src  # For development hot-reload
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - inventory-network
+
+  # Streamlit Dashboard Service
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: inventory-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
+      - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
+      - DATABASE_URL=sqlite:///./data/inventory.db
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD must be set in .env}
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-inventory-system}
+    volumes:
+      - ../data:/app/data
+      - ../src:/app/src  # For development hot-reload
+    command: streamlit run src/ui/dashboard.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - inventory-network
+
+  # ngrok tunnel (exposes local/production server to internet for Telegram webhook)
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: inventory-ngrok
+    restart: unless-stopped
+    command:
+      - "http"
+      - "api:8000"
+      - "--domain=${NGROK_DOMAIN_DEV}"
+    ports:
+      - "4040:4040"  # ngrok web interface
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN_DEV:-${NGROK_AUTHTOKEN:-}}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - inventory-network
+
+  # Webhook setup service (runs once to configure Telegram webhook)
+  webhook-setup:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: inventory-webhook-setup
+    restart: "no"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
+      - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ../scripts:/app/scripts
+      - ../src:/app/src
+    command: python /app/scripts/setup-webhook.py
+    depends_on:
+      api:
+        condition: service_healthy
+      ngrok:
+        condition: service_started
+    networks:
+      - inventory-network
+
+  # Nginx Reverse Proxy (optional, for production)
+  nginx:
+    image: nginx:alpine
+    container_name: inventory-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - dashboard
+    networks:
+      - inventory-network
+    profiles:
+      - production
+
+networks:
+  inventory-network:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local
+
