@@ -99,6 +99,36 @@ async def _process_telegram_webhook(request: Request):
         chat_id = message["chat"]["id"]
         print(f"💬 Processing message for chat_id: {chat_id}")
 
+        # ---- Access control gate ----
+        if settings.allowed_users_only:
+            meta = get_metadata_session()
+            try:
+                if crud.is_user_authorized(meta, chat_id):
+                    pass  # proceed normally
+                else:
+                    # Extract text early to check for secret code
+                    raw_text = message.get("text", "")
+                    if raw_text.strip() == settings.secret_code:
+                        crud.authorize_user(meta, chat_id)
+                        await telegram_bot.send_message_async(
+                            chat_id, "✅ Acceso concedido / Access granted"
+                        )
+                        return JSONResponse({"ok": True})
+
+                    if crud.is_user_blocked(meta, chat_id):
+                        # Silently ignore — no response
+                        return JSONResponse({"ok": True})
+
+                    attempts = crud.increment_failed_attempts(meta, chat_id)
+                    if attempts <= crud.MAX_ACCESS_ATTEMPTS:
+                        await telegram_bot.send_message_async(
+                            chat_id,
+                            "🔒 Por favor proveer código de ingreso / Please provide access code",
+                        )
+                    return JSONResponse({"ok": True})
+            finally:
+                meta.close()
+
         db, effective_chat_id, is_linked = get_resolved_session(chat_id)
 
         try:

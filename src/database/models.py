@@ -7,7 +7,7 @@ Supports per-user SQLite databases: each Telegram user gets their own
 """
 import secrets
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -40,7 +40,7 @@ class Item(Base):
     quantity = Column(Integer, nullable=False, default=0)
     category = Column(String, nullable=False, index=True)
     expire_date = Column(Date, nullable=True)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     def __repr__(self):
         return f"<Item(id={self.id}, name='{self.name}', quantity={self.quantity}, category='{self.category}')>"
@@ -80,12 +80,38 @@ class UserCode(MetadataBase):
 
     chat_id = Column(Integer, primary_key=True)
     link_code = Column(String, unique=True, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     links = relationship("AccountLink", back_populates="owner", foreign_keys="AccountLink.owner_chat_id")
 
     def __repr__(self):
         return f"<UserCode(chat_id={self.chat_id}, link_code='{self.link_code}')>"
+
+
+class AuthorizedUser(MetadataBase):
+    """Tracks users who have been granted access via the secret code.
+
+    Attributes:
+        chat_id: Telegram chat/user ID (primary key)
+        attempts: Number of failed access attempts before authorization
+        is_authorized: Whether the user has provided the correct secret code
+        created_at: Timestamp of the first interaction
+        authorized_at: Timestamp when access was granted (None if not yet authorized)
+    """
+
+    __tablename__ = "authorized_users"
+
+    chat_id = Column(Integer, primary_key=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    is_authorized = Column(Integer, nullable=False, default=0)  # SQLite boolean
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    authorized_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return (
+            f"<AuthorizedUser(chat_id={self.chat_id}, "
+            f"authorized={bool(self.is_authorized)}, attempts={self.attempts})>"
+        )
 
 
 class AccountLink(MetadataBase):
@@ -103,7 +129,7 @@ class AccountLink(MetadataBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_chat_id = Column(Integer, ForeignKey("user_codes.chat_id"), nullable=False)
     linked_chat_id = Column(Integer, unique=True, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     owner = relationship("UserCode", back_populates="links", foreign_keys=[owner_chat_id])
 
