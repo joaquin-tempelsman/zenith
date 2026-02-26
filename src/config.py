@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./inventory.db")
 
     # Dashboard Configuration
-    dashboard_password: str = os.getenv("DASHBOARD_PASSWORD", "admin123")
+    dashboard_password: str = os.getenv("DASHBOARD_PASSWORD", "")
 
     # Application Configuration
     app_host: str = os.getenv("APP_HOST", "0.0.0.0")

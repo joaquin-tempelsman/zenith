@@ -1,4 +1,4 @@
-# Voice-Managed Inventory System
+# Agentic-Managed Inventory System
 
 A full-stack inventory management system with voice input support via Telegram bot, powered by FastAPI, SQLite, and Streamlit.
 
@@ -6,11 +6,8 @@ A full-stack inventory management system with voice input support via Telegram b
 
 - 🎤 **Voice Input**: Send voice messages via Telegram for hands-free inventory management
 - 💬 **Text Input**: Also supports text-based commands
-- 🤖 **AI-Powered**: Uses OpenAI Whisper (STT) and GPT (intent parsing)
+- 🤖 **AI-Powered**: Uses a LangChain Agent for intent parsing and OpenAI Whisper for STT (translate)
 - 📊 **Dashboard**: Real-time inventory monitoring with Streamlit
-- 💻 **SQL Runner**: Execute custom SQL queries directly from the UI
-- 📅 **Expiration Tracking**: Track item expiration dates
-- 🔔 **Smart Alerts**: Low stock and expiring items notifications
 - 🐳 **Docker Support**: Fully containerized with Docker and Docker Compose
 - 🔄 **CI/CD**: Automated testing and deployment with GitHub Actions
 - ☁️ **Cloud Ready**: Easy deployment to Digital Ocean or any cloud VM
@@ -35,32 +32,6 @@ inventory_project/
 │   └── ui/
 │       └── dashboard.py    # Streamlit dashboard
 ```
-
-## 🛠️ Tech Stack
-
-- **Backend**: FastAPI (Async Python web framework)
-- **Database**: SQLite with SQLAlchemy ORM
-- **Frontend**: Streamlit
-- **AI**: OpenAI API (Whisper + GPT-4)
-- **Bot**: Telegram Bot API
-- **Package Manager**: uv (fast Python package manager)
-- **Containerization**: Docker & Docker Compose
-- **CI/CD**: GitHub Actions
-- **Reverse Proxy**: Nginx (production)
-
-## 📋 Prerequisites
-
-### For Docker (Recommended)
-- Docker Desktop installed and running
-- Git
-- OpenAI API key
-- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
-
-### For Local Development (Alternative)
-- Python 3.10+
-- [uv](https://github.com/astral-sh/uv) installed
-- OpenAI API key
-- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
 
 ## 🔧 Quick Start
 
@@ -133,7 +104,42 @@ inventory_project/
    ./start_dashboard.sh
    ```
 
-## 🔐 Environment Configuration
+<details>
+<summary>🛠️ Tech Stack</summary>
+
+- **Backend**: FastAPI (Async Python web framework)
+- **Database**: SQLite with SQLAlchemy ORM
+- **Frontend**: Streamlit
+- **AI/Agent Framework**: [LangChain](https://www.langchain.com/) + [LangGraph](https://langchain-ai.github.io/langgraph/) for agent orchestration, tool calling, and middleware (model/tool call limits)
+- **LLM Providers**: OpenAI (Whisper STT + GPT-4o-mini), with Anthropic support
+- **Observability**: [LangSmith](https://smith.langchain.com/) for tracing, debugging, and monitoring agent runs
+- **Bot**: Telegram Bot API
+- **Package Manager**: uv (fast Python package manager)
+- **Containerization**: Docker & Docker Compose
+- **CI/CD**: GitHub Actions
+- **Reverse Proxy**: Nginx (production)
+
+</details>
+
+<details>
+<summary>📋 Prerequisites</summary>
+
+### For Docker (Recommended)
+- Docker Desktop installed and running
+- Git
+- OpenAI API key
+- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
+
+### For Local Development (Alternative)
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) installed
+- OpenAI API key
+- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
+
+</details>
+
+<details>
+<summary>🔐 Environment Configuration</summary>
 
 Get your Telegram Bot Token:
 1. Open Telegram and search for [@BotFather](https://t.me/botfather)
@@ -171,7 +177,10 @@ The webhook is **automatically configured** when you start the application:
 
 For detailed webhook setup information, see [docs/WEBHOOK_SETUP.md](docs/WEBHOOK_SETUP.md)
 
-## 🚀 Running the Application
+</details>
+
+<details>
+<summary>🚀 Running the Application</summary>
 
 ### With Docker
 
@@ -228,7 +237,10 @@ uv run python scripts/setup-webhook.py
 
 **Note**: With Docker, this is done automatically! See [docs/WEBHOOK_SETUP.md](docs/WEBHOOK_SETUP.md) for details.
 
-## 📱 Usage
+</details>
+
+<details>
+<summary>📱 Usage</summary>
 
 ### Telegram Bot Commands
 
@@ -260,22 +272,21 @@ Send voice or text messages to your bot:
 - View all items in a filterable table
 - Category breakdown charts
 - Low stock warnings
-- Expiring items alerts
 - Real-time statistics
 
-#### SQL Runner Tab
-- Execute custom SQL queries
-- View results in table format
-- Download results as CSV
-- Example queries provided
+</details>
 
-## 🔐 Security
+<details>
+<summary>🔐 Security</summary>
 
 - Dashboard protected with password authentication
 - Use environment variables for sensitive data
 - Never commit `.env` file to version control
 
-## 📊 Database Schema
+</details>
+
+<details>
+<summary>📊 Database Schema</summary>
 
 ### Items Table
 
@@ -288,7 +299,10 @@ Send voice or text messages to your bot:
 | expire_date | Date | Expiration date (optional) |
 | last_updated | DateTime | Last modification timestamp |
 
-## 🧪 Development
+</details>
+
+<details>
+<summary>🧪 Development</summary>
 
 ### Install Dev Dependencies
 
@@ -312,7 +326,10 @@ uv run black src/
 uv run ruff check src/
 ```
 
-## 📝 API Endpoints
+</details>
+
+<details>
+<summary>📝 API Endpoints</summary>
 
 ### FastAPI Endpoints
 
@@ -330,7 +347,10 @@ Once FastAPI is running, visit:
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
-## 🐛 Troubleshooting
+</details>
+
+<details>
+<summary>🐛 Troubleshooting</summary>
 
 ### Database Not Found
 ```bash
@@ -348,7 +368,10 @@ uv run python -c "from src.database.models import init_db; init_db()"
 - Check OpenAI account has credits
 - Ensure you have access to Whisper and GPT models
 
-## 🚢 Deployment
+</details>
+
+<details>
+<summary>🚢 Deployment</summary>
 
 ### Deploy to Digital Ocean
 
@@ -418,15 +441,14 @@ make db-backup        # Backup database
 make clean            # Clean up containers and volumes
 ```
 
-## 📚 Additional Resources
+</details>
+
+<details>
+<summary>📚 Additional Resources</summary>
 
 - [DEPLOYMENT.md](DEPLOYMENT.md) - Complete deployment guide
-- [FastAPI Documentation](https://fastapi.tiangolo.com/)
-- [Streamlit Documentation](https://docs.streamlit.io/)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [OpenAI API Documentation](https://platform.openai.com/docs)
-- [uv Documentation](https://github.com/astral-sh/uv)
-- [Docker Documentation](https://docs.docker.com/)
+
+</details>
 
 ## 📄 License
 

@@ -23,7 +23,7 @@ NC='\033[0m' # No Color
 # Configuration
 DROPLET_IP="$1"
 SSH_KEY_PATH="$HOME/.ssh/docean"
-REPO_NAME="joaquin-tempelsman/zenith"
+REPO_NAME="${GITHUB_REPO:-YOUR_USERNAME/YOUR_REPO}"
 APP_DIR="/opt/inventory-system"
 
 # ════════════════════════════════════════════════════════
@@ -69,7 +69,7 @@ run_on_droplet() {
 
 if [ -z "$DROPLET_IP" ]; then
     print_error "Usage: $0 <DROPLET_IP>"
-    echo "Example: $0 159.203.139.96"
+    echo "Example: $0 YOUR_DROPLET_IP"
     exit 1
 fi
 

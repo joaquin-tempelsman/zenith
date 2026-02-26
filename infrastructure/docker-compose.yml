@@ -17,7 +17,7 @@ services:
       - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
       - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
       - DATABASE_URL=sqlite:///./data/inventory.db
-      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-admin123}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD must be set in .env}
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
@@ -53,7 +53,7 @@ services:
       - TELEGRAM_BOT_TOKEN_DEV=${TELEGRAM_BOT_TOKEN_DEV:-}
       - TELEGRAM_BOT_TOKEN_PROD=${TELEGRAM_BOT_TOKEN_PROD:-}
       - DATABASE_URL=sqlite:///./data/inventory.db
-      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-admin123}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD must be set in .env}
       - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
@@ -76,7 +76,7 @@ services:
     command:
       - "http"
       - "api:8000"
-      - "--domain=${NGROK_DOMAIN_DEV:-juniper-subcritical-diurnally.ngrok-free.dev}"
+      - "--domain=${NGROK_DOMAIN_DEV}"
     ports:
       - "4040:4040"  # ngrok web interface
     environment:
