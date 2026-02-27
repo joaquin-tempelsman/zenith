@@ -305,3 +305,82 @@ class TestWebhookAccessControl:
             )
             assert resp.status_code == 200
             mock_bot.send_message_async.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_start_command_does_not_count_as_attempt(self, async_client, meta_session):
+        """/start prompts for the code but does not consume a failed attempt."""
+        with (
+            patch("src.main.settings") as mock_settings,
+            patch("src.main.get_metadata_session", return_value=meta_session),
+            patch("src.main.telegram_bot") as mock_bot,
+        ):
+            mock_settings.allowed_users_only = True
+            mock_settings.secret_code = "testcode"
+            mock_bot.send_message_async = AsyncMock()
+
+            resp = await async_client.post(
+                "/telegram-webhook",
+                json=_make_text_payload(111, "/start"),
+            )
+        assert resp.status_code == 200
+        mock_bot.send_message_async.assert_awaited_once()
+        call_args = mock_bot.send_message_async.call_args
+        assert "código de ingreso" in call_args[0][1]
+
+        # No failed attempt recorded
+        assert crud.get_failed_attempts(meta_session, 111) == 0
+
+    @pytest.mark.asyncio
+    async def test_voice_message_does_not_count_as_attempt(self, async_client, meta_session):
+        """Voice messages prompt for the code but do not consume a failed attempt."""
+        voice_payload = {
+            "message": {
+                "chat": {"id": 222},
+                "voice": {"file_id": "abc123", "duration": 2},
+            }
+        }
+        with (
+            patch("src.main.settings") as mock_settings,
+            patch("src.main.get_metadata_session", return_value=meta_session),
+            patch("src.main.telegram_bot") as mock_bot,
+        ):
+            mock_settings.allowed_users_only = True
+            mock_settings.secret_code = "testcode"
+            mock_bot.send_message_async = AsyncMock()
+
+            resp = await async_client.post(
+                "/telegram-webhook",
+                json=voice_payload,
+            )
+        assert resp.status_code == 200
+        mock_bot.send_message_async.assert_awaited_once()
+        call_args = mock_bot.send_message_async.call_args
+        assert "código de ingreso" in call_args[0][1]
+
+        assert crud.get_failed_attempts(meta_session, 222) == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_secret_code_does_not_auto_authorize(self, async_client, meta_session):
+        """An empty secret_code setting never auto-authorizes users."""
+        with (
+            patch("src.main.settings") as mock_settings,
+            patch("src.main.get_metadata_session", return_value=meta_session),
+            patch("src.main.telegram_bot") as mock_bot,
+        ):
+            mock_settings.allowed_users_only = True
+            mock_settings.secret_code = ""
+            mock_bot.send_message_async = AsyncMock()
+
+            # Voice message (text == "") with empty secret code
+            voice_payload = {
+                "message": {
+                    "chat": {"id": 333},
+                    "voice": {"file_id": "xyz789", "duration": 3},
+                }
+            }
+            resp = await async_client.post(
+                "/telegram-webhook",
+                json=voice_payload,
+            )
+        assert resp.status_code == 200
+        assert crud.is_user_authorized(meta_session, 333) is False
