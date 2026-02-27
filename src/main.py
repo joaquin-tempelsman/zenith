@@ -106,9 +106,11 @@ async def _process_telegram_webhook(request: Request):
                 if crud.is_user_authorized(meta, chat_id):
                     pass  # proceed normally
                 else:
-                    # Extract text early to check for secret code
                     raw_text = message.get("text", "")
-                    if raw_text.strip() == settings.secret_code:
+                    code = raw_text.strip()
+
+                    # Check for secret code (guard against empty code)
+                    if settings.secret_code and code == settings.secret_code:
                         crud.authorize_user(meta, chat_id)
                         await telegram_bot.send_message_async(
                             chat_id, "✅ Acceso concedido / Access granted"
@@ -119,8 +121,18 @@ async def _process_telegram_webhook(request: Request):
                         # Silently ignore — no response
                         return JSONResponse({"ok": True})
 
-                    attempts = crud.increment_failed_attempts(meta, chat_id)
-                    if attempts <= crud.MAX_ACCESS_ATTEMPTS:
+                    # Only count actual text (non-command) messages as
+                    # failed code attempts.  /start, voice messages, etc.
+                    # just get the prompt without burning an attempt.
+                    is_code_attempt = bool(code) and not code.startswith("/")
+                    if is_code_attempt:
+                        attempts = crud.increment_failed_attempts(meta, chat_id)
+                        if attempts <= crud.MAX_ACCESS_ATTEMPTS:
+                            await telegram_bot.send_message_async(
+                                chat_id,
+                                "🔒 Por favor proveer código de ingreso / Please provide access code",
+                            )
+                    else:
                         await telegram_bot.send_message_async(
                             chat_id,
                             "🔒 Por favor proveer código de ingreso / Please provide access code",

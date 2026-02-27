@@ -24,6 +24,10 @@ services:
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-inventory-system}
+      - ALLOWED_USERS_ONLY_DEV=${ALLOWED_USERS_ONLY_DEV:-false}
+      - ALLOWED_USERS_ONLY_PROD=${ALLOWED_USERS_ONLY_PROD:-false}
+      - SECRET_CODE_DEV=${SECRET_CODE_DEV:-}
+      - SECRET_CODE_PROD=${SECRET_CODE_PROD:-}
     volumes:
       - ../data:/app/data
       - ../src:/app/src  # For development hot-reload
@@ -58,6 +62,10 @@ services:
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-inventory-system}
+      - ALLOWED_USERS_ONLY_DEV=${ALLOWED_USERS_ONLY_DEV:-false}
+      - ALLOWED_USERS_ONLY_PROD=${ALLOWED_USERS_ONLY_PROD:-false}
+      - SECRET_CODE_DEV=${SECRET_CODE_DEV:-}
+      - SECRET_CODE_PROD=${SECRET_CODE_PROD:-}
     volumes:
       - ../data:/app/data
       - ../src:/app/src  # For development hot-reload
