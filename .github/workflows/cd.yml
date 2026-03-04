@@ -74,8 +74,9 @@ jobs:
           script: |
             cd /opt/inventory-system
 
-            # Pull latest code
-            git pull origin main
+            # Pull latest code (reset to handle force-pushes/rebases)
+            git fetch origin main
+            git reset --hard origin/main
 
             # Ensure backup cron and sqlite3 are present
             apt-get install -y sqlite3 2>/dev/null || true
