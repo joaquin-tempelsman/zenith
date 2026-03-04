@@ -95,6 +95,30 @@ class Settings(BaseSettings):
             return os.getenv("SECRET_CODE_PROD", "")
         return os.getenv("SECRET_CODE_DEV", "")
 
+    @property
+    def admin_secret_code(self) -> str:
+        """Secret code a user must provide to gain admin access.
+
+        Selects the appropriate code based on environment:
+        - production: ADMIN_SECRET_CODE_PROD
+        - development: ADMIN_SECRET_CODE_DEV
+
+        Returns:
+            The admin secret code string for the current environment.
+        """
+        if self.environment == "production":
+            return os.getenv("ADMIN_SECRET_CODE_PROD", "")
+        return os.getenv("ADMIN_SECRET_CODE_DEV", "")
+
+    @property
+    def daily_report_hour(self) -> int:
+        """UTC hour at which the daily admin report is sent.
+
+        Returns:
+            Integer hour (0-23). Defaults to 21 (9 PM UTC).
+        """
+        return int(os.getenv("DAILY_REPORT_HOUR", "21"))
+
     class Config:
         env_file = ".env"
         case_sensitive = False

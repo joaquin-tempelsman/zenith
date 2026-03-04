@@ -260,6 +260,20 @@ sleep 30
 print_success "Services should be ready"
 
 # ════════════════════════════════════════════════════════
+# STEP 12b: Setup Backup Script
+# ════════════════════════════════════════════════════════
+
+print_header "STEP 12b: Setup Backup Script"
+
+print_step "Making backup script executable on droplet..."
+run_on_droplet "chmod +x $APP_DIR/scripts/backup-databases.sh"
+print_success "Backup script ready"
+
+print_step "Running initial backup..."
+run_on_droplet "$APP_DIR/scripts/backup-databases.sh $APP_DIR/data /opt/backups/zenith" || true
+print_success "Initial backup complete"
+
+# ════════════════════════════════════════════════════════
 # STEP 13: Verify Deployment
 # ════════════════════════════════════════════════════════
 

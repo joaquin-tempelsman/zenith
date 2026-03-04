@@ -8,11 +8,27 @@ Supports per-user SQLite databases: each Telegram user gets their own
 import secrets
 from pathlib import Path
 from datetime import datetime, date, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from ..config import settings
+
+
+def _enable_wal(engine: Engine) -> None:
+    """Enable WAL journal mode on a SQLite engine via a connect event.
+
+    WAL (Write-Ahead Logging) allows concurrent reads during writes and
+    produces safer backups.  The pragma is a no-op on non-SQLite engines.
+
+    Args:
+        engine: SQLAlchemy engine to configure.
+    """
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
 
 # Create SQLAlchemy Base (per-user inventory tables)
 Base = declarative_base()
@@ -114,6 +130,70 @@ class AuthorizedUser(MetadataBase):
         )
 
 
+class AdminUser(MetadataBase):
+    """Tracks users who have been granted admin access.
+
+    Admin users receive daily reports with usage statistics.
+
+    Attributes:
+        chat_id: Telegram chat/user ID (primary key)
+        granted_at: Timestamp when admin access was granted
+    """
+
+    __tablename__ = "admin_users"
+
+    chat_id = Column(Integer, primary_key=True)
+    granted_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<AdminUser(chat_id={self.chat_id})>"
+
+
+class MessageLog(MetadataBase):
+    """Logs each incoming Telegram message for usage reporting.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        chat_id: Telegram chat/user ID that sent the message
+        timestamp: When the message was received (UTC)
+    """
+
+    __tablename__ = "message_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    def __repr__(self):
+        return f"<MessageLog(id={self.id}, chat_id={self.chat_id})>"
+
+
+class TokenUsage(MetadataBase):
+    """Records LLM token consumption per agent invocation.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        chat_id: Telegram chat/user ID that triggered the invocation
+        input_tokens: Number of prompt/input tokens consumed
+        output_tokens: Number of completion/output tokens consumed
+        timestamp: When the invocation occurred (UTC)
+    """
+
+    __tablename__ = "token_usage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    def __repr__(self):
+        return (
+            f"<TokenUsage(id={self.id}, chat_id={self.chat_id}, "
+            f"in={self.input_tokens}, out={self.output_tokens})>"
+        )
+
+
 class AccountLink(MetadataBase):
     """Maps a linked user to an owner whose database they share.
 
@@ -175,6 +255,7 @@ def get_metadata_engine() -> Engine:
             connect_args={"check_same_thread": False},
             echo=False,
         )
+        _enable_wal(_metadata_engine)
         MetadataBase.metadata.create_all(bind=_metadata_engine)
     return _metadata_engine
 
@@ -240,6 +321,7 @@ def get_engine_for_user(chat_id: int) -> Engine:
             connect_args={"check_same_thread": False},
             echo=False,
         )
+        _enable_wal(engine)
         Base.metadata.create_all(bind=engine)
         _user_engines[chat_id] = engine
     return _user_engines[chat_id]
@@ -283,6 +365,77 @@ def get_db_for_user(chat_id: int):
 
 
 # ---------------------------------------------------------------------------
+# Automatic Alembic migrations on startup
+# ---------------------------------------------------------------------------
+
+
+def run_migrations() -> None:
+    """Apply pending Alembic migrations to all existing per-user databases.
+
+    For each discovered ``inventory_*.db`` (and legacy ``inventory.db``):
+    1. If the DB has no ``alembic_version`` table it was created by
+       ``create_all()`` and is already at the current schema — stamp it
+       with ``head`` so Alembic knows.
+    2. Run ``alembic upgrade head`` to apply any pending migrations.
+
+    Safe to call on every startup — it's a no-op when everything is
+    already up to date.
+    """
+    import os
+    from glob import glob
+    from alembic.config import Config
+    from alembic import command
+    from sqlalchemy import inspect, create_engine as _ce, pool
+
+    # Locate alembic.ini relative to project root
+    project_root = Path(__file__).resolve().parent.parent.parent
+    alembic_ini = project_root / "alembic.ini"
+    if not alembic_ini.exists():
+        print("⚠️  alembic.ini not found — skipping auto-migration")
+        return
+
+    alembic_cfg = Config(str(alembic_ini))
+
+    # Discover all per-user databases
+    raw_path = settings.database_url.replace("sqlite:///", "")
+    data_dir = Path(raw_path).parent
+    db_files = sorted(glob(str(data_dir / "inventory_*.db")))
+    legacy = data_dir / "inventory.db"
+    if legacy.exists() and str(legacy) not in db_files:
+        db_files.insert(0, str(legacy))
+
+    if not db_files:
+        print("ℹ️  No databases found yet — skipping auto-migration")
+        return
+
+    migrated = 0
+    stamped = 0
+    for db_path in db_files:
+        url = f"sqlite:///{db_path}"
+        eng = _ce(url, poolclass=pool.NullPool)
+        try:
+            insp = inspect(eng)
+            has_alembic = "alembic_version" in insp.get_table_names()
+
+            # Override the sqlalchemy.url so Alembic targets this specific DB
+            alembic_cfg.set_main_option("sqlalchemy.url", url)
+
+            if not has_alembic:
+                # DB was created by create_all() — already at current schema
+                command.stamp(alembic_cfg, "head")
+                stamped += 1
+
+            command.upgrade(alembic_cfg, "head")
+            migrated += 1
+        except Exception as exc:
+            print(f"⚠️  Migration failed for {db_path}: {exc}")
+        finally:
+            eng.dispose()
+
+    print(f"🔄 Alembic: {migrated} DBs migrated, {stamped} newly stamped")
+
+
+# ---------------------------------------------------------------------------
 # Legacy global engine/session (kept for dashboard backward-compat)
 # ---------------------------------------------------------------------------
 
@@ -291,6 +444,8 @@ engine = create_engine(
     connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
     echo=False,
 )
+if "sqlite" in settings.database_url:
+    _enable_wal(engine)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -2,7 +2,8 @@
 FastAPI application entry point.
 Handles Telegram webhook for voice and text-based inventory management.
 """
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timezone, date
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -12,6 +13,7 @@ from .database.models import get_session_for_user, get_metadata_session
 from .database import crud
 from .services.telegram import telegram_bot
 from .services.message_handler import extract_message_text, extract_voice_text
+from .services.daily_report import generate_daily_report, send_daily_reports
 from .agent import run_inventory_agent
 from .models import AgentConfig
 
@@ -24,9 +26,41 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    """Log configuration status on application startup."""
+    """Log configuration status, run migrations, and start the daily-report scheduler."""
     print(f"📱 Telegram Bot Token configured: {bool(settings.telegram_bot_token)}")
     print(f"🤖 OpenAI API Key configured: {bool(settings.openai_api_key)}")
+    print(f"🔑 Admin secret code configured: {bool(settings.admin_secret_code)}")
+
+    # Auto-apply pending Alembic migrations to all per-user databases
+    from .database.models import run_migrations
+    run_migrations()
+
+    print(f"📊 Daily report scheduled at {settings.daily_report_hour}:00 UTC")
+    asyncio.create_task(_daily_report_loop())
+
+
+async def _daily_report_loop():
+    """Background loop that sends the daily admin report once per day.
+
+    Runs indefinitely, sleeping until the configured UTC hour.
+    """
+    while True:
+        now = datetime.now(timezone.utc)
+        target_hour = settings.daily_report_hour
+        # Calculate seconds until next target_hour
+        target = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target = target.replace(day=target.day + 1) if target.month == now.month else target
+            # Safer: just add 86400 and re-compute
+            from datetime import timedelta
+            target = now.replace(hour=target_hour, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        wait_seconds = (target - now).total_seconds()
+        print(f"⏰ Next daily report in {wait_seconds:.0f}s")
+        await asyncio.sleep(wait_seconds)
+        try:
+            await send_daily_reports()
+        except Exception as exc:
+            print(f"🚨 Daily report error: {exc}")
 
 
 def get_resolved_session(chat_id: int) -> tuple:
@@ -68,6 +102,71 @@ async def health_check():
         "openai_configured": bool(settings.openai_api_key),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def _handle_admin_command(chat_id: int, raw_text: str):
+    """Handle /admin commands from Telegram users.
+
+    Supported sub-commands:
+    - ``/admin <code>``  — authenticate as admin using the admin secret code
+    - ``/admin report``  — (admin only) trigger an immediate daily report
+    - ``/admin status``  — (admin only) check admin status
+
+    Args:
+        chat_id: Telegram chat/user ID
+        raw_text: Full text of the message (e.g. ``/admin mysecretcode``)
+
+    Returns:
+        JSONResponse to acknowledge the webhook
+    """
+    parts = raw_text.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    meta = get_metadata_session()
+    try:
+        already_admin = crud.is_admin(meta, chat_id)
+
+        # /admin (no arg) — show status
+        if not arg:
+            if already_admin:
+                await telegram_bot.send_message_async(
+                    chat_id, "✅ You are an admin. Use /admin report to get a report."
+                )
+            else:
+                await telegram_bot.send_message_async(
+                    chat_id, "🔑 Usage: /admin <code>"
+                )
+            return JSONResponse({"ok": True})
+
+        # /admin report — send report now
+        if arg.lower() == "report":
+            if not already_admin:
+                await telegram_bot.send_message_async(chat_id, "🔒 Admin access required.")
+                return JSONResponse({"ok": True})
+            report = generate_daily_report(date.today())
+            await telegram_bot.send_message_async(chat_id, report)
+            return JSONResponse({"ok": True})
+
+        # /admin status
+        if arg.lower() == "status":
+            if already_admin:
+                await telegram_bot.send_message_async(chat_id, "✅ You are an admin.")
+            else:
+                await telegram_bot.send_message_async(chat_id, "❌ You are not an admin.")
+            return JSONResponse({"ok": True})
+
+        # /admin <code> — authenticate
+        if settings.admin_secret_code and arg == settings.admin_secret_code:
+            crud.grant_admin(meta, chat_id)
+            await telegram_bot.send_message_async(
+                chat_id, "✅ Admin access granted. You will receive daily reports."
+            )
+        else:
+            await telegram_bot.send_message_async(chat_id, "❌ Invalid admin code.")
+    finally:
+        meta.close()
+
+    return JSONResponse({"ok": True})
 
 
 async def _process_telegram_webhook(request: Request):
@@ -140,6 +239,20 @@ async def _process_telegram_webhook(request: Request):
                     return JSONResponse({"ok": True})
             finally:
                 meta.close()
+
+        # ---- Log every authorized message ----
+        meta = get_metadata_session()
+        try:
+            crud.log_message(meta, chat_id)
+        except Exception:
+            pass
+        finally:
+            meta.close()
+
+        # ---- Admin command handling ----
+        raw_text = message.get("text", "").strip()
+        if raw_text.startswith("/admin"):
+            return await _handle_admin_command(chat_id, raw_text)
 
         db, effective_chat_id, is_linked = get_resolved_session(chat_id)
 
