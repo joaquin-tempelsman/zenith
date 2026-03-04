@@ -193,6 +193,11 @@ async def _process_telegram_webhook(request: Request):
         chat_id = message["chat"]["id"]
         print(f"💬 Processing message for chat_id: {chat_id}")
 
+        # ---- Admin command handling (before access gate) ----
+        raw_text = message.get("text", "").strip()
+        if raw_text.startswith("/admin"):
+            return await _handle_admin_command(chat_id, raw_text)
+
         # ---- Access control gate ----
         if settings.allowed_users_only:
             meta = get_metadata_session()
@@ -243,11 +248,6 @@ async def _process_telegram_webhook(request: Request):
             pass
         finally:
             meta.close()
-
-        # ---- Admin command handling ----
-        raw_text = message.get("text", "").strip()
-        if raw_text.startswith("/admin"):
-            return await _handle_admin_command(chat_id, raw_text)
 
         db, effective_chat_id, is_linked = get_resolved_session(chat_id)
 
