@@ -8,11 +8,27 @@ Supports per-user SQLite databases: each Telegram user gets their own
 import secrets
 from pathlib import Path
 from datetime import datetime, date, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from ..config import settings
+
+
+def _enable_wal(engine: Engine) -> None:
+    """Enable WAL journal mode on a SQLite engine via a connect event.
+
+    WAL (Write-Ahead Logging) allows concurrent reads during writes and
+    produces safer backups.  The pragma is a no-op on non-SQLite engines.
+
+    Args:
+        engine: SQLAlchemy engine to configure.
+    """
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
 
 # Create SQLAlchemy Base (per-user inventory tables)
 Base = declarative_base()
@@ -114,6 +130,70 @@ class AuthorizedUser(MetadataBase):
         )
 
 
+class AdminUser(MetadataBase):
+    """Tracks users who have been granted admin access.
+
+    Admin users receive daily reports with usage statistics.
+
+    Attributes:
+        chat_id: Telegram chat/user ID (primary key)
+        granted_at: Timestamp when admin access was granted
+    """
+
+    __tablename__ = "admin_users"
+
+    chat_id = Column(Integer, primary_key=True)
+    granted_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<AdminUser(chat_id={self.chat_id})>"
+
+
+class MessageLog(MetadataBase):
+    """Logs each incoming Telegram message for usage reporting.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        chat_id: Telegram chat/user ID that sent the message
+        timestamp: When the message was received (UTC)
+    """
+
+    __tablename__ = "message_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    def __repr__(self):
+        return f"<MessageLog(id={self.id}, chat_id={self.chat_id})>"
+
+
+class TokenUsage(MetadataBase):
+    """Records LLM token consumption per agent invocation.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        chat_id: Telegram chat/user ID that triggered the invocation
+        input_tokens: Number of prompt/input tokens consumed
+        output_tokens: Number of completion/output tokens consumed
+        timestamp: When the invocation occurred (UTC)
+    """
+
+    __tablename__ = "token_usage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, nullable=False, index=True)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    def __repr__(self):
+        return (
+            f"<TokenUsage(id={self.id}, chat_id={self.chat_id}, "
+            f"in={self.input_tokens}, out={self.output_tokens})>"
+        )
+
+
 class AccountLink(MetadataBase):
     """Maps a linked user to an owner whose database they share.
 
@@ -175,6 +255,7 @@ def get_metadata_engine() -> Engine:
             connect_args={"check_same_thread": False},
             echo=False,
         )
+        _enable_wal(_metadata_engine)
         MetadataBase.metadata.create_all(bind=_metadata_engine)
     return _metadata_engine
 
@@ -240,6 +321,7 @@ def get_engine_for_user(chat_id: int) -> Engine:
             connect_args={"check_same_thread": False},
             echo=False,
         )
+        _enable_wal(engine)
         Base.metadata.create_all(bind=engine)
         _user_engines[chat_id] = engine
     return _user_engines[chat_id]
@@ -291,6 +373,8 @@ engine = create_engine(
     connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
     echo=False,
 )
+if "sqlite" in settings.database_url:
+    _enable_wal(engine)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

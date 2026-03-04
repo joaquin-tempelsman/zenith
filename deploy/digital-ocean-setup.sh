@@ -40,7 +40,8 @@ apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--fo
     fail2ban \
     ca-certificates \
     gnupg \
-    lsb-release
+    lsb-release \
+    sqlite3
 
 echo ""
 echo -e "${BLUE}3️⃣  Installing Docker...${NC}"
@@ -93,6 +94,15 @@ if ! id -u deploy > /dev/null 2>&1; then
 else
     echo -e "${YELLOW}⚠️  User 'deploy' already exists${NC}"
 fi
+
+echo ""
+echo -e "${BLUE}8️⃣  Setting up daily database backups...${NC}"
+mkdir -p /opt/backups/zenith
+
+# Install backup cron job (daily at 3:00 AM server time)
+BACKUP_CRON="0 3 * * * /opt/inventory-system/scripts/backup-databases.sh /opt/inventory-system/data /opt/backups/zenith >> /var/log/zenith-backup.log 2>&1"
+( crontab -l 2>/dev/null | grep -v 'backup-databases.sh'; echo "$BACKUP_CRON" ) | crontab -
+echo -e "${GREEN}✅ Daily backup cron job installed (3:00 AM)${NC}"
 
 echo ""
 echo "════════════════════════════════════════════════════════"

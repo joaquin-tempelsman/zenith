@@ -145,10 +145,30 @@ db-init:
 	$(DC) exec api python -c "from src.database.models import init_db; init_db(); print('✅ Database initialized')"
 
 db-backup:
-	@echo "💾 Backing up database..."
+	@echo "💾 Backing up all databases..."
 	@mkdir -p backups
-	docker cp inventory-api:/app/data/inventory.db ./backups/inventory-$(shell date +%Y%m%d-%H%M%S).db
-	@echo "✅ Backup created in ./backups/"
+	$(DC) exec api bash /app/scripts/backup-databases.sh /app/data /app/backups 2>/dev/null || \
+		bash scripts/backup-databases.sh data backups
+	@echo "✅ Backup created!"
+
+db-migrate:
+	@echo "🔄 Running database migrations..."
+	uv run alembic upgrade head
+	@echo "✅ Migrations applied to all databases!"
+
+db-migration:
+	@echo "📝 Creating new migration..."
+	@if [ -z "$(msg)" ]; then \
+		echo "❌ Usage: make db-migration msg=\"description of change\""; \
+		exit 1; \
+	fi
+	uv run alembic revision --autogenerate -m "$(msg)"
+	@echo "✅ Migration created! Review it in alembic/versions/"
+
+db-rollback:
+	@echo "⏪ Rolling back last migration..."
+	uv run alembic downgrade -1
+	@echo "✅ Rollback complete!"
 
 # Utilities
 shell:

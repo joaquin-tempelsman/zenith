@@ -139,6 +139,7 @@ def run_inventory_agent(user_input: str, db: Session, chat_id: int) -> dict[str,
     from langchain_core.messages import HumanMessage, AIMessage
     from langchain_core.runnables import RunnableConfig
     from ..database.models import get_metadata_session
+    from ..database import crud as meta_crud
 
     set_db_session(db)
     set_chat_id(chat_id)
@@ -172,12 +173,26 @@ def run_inventory_agent(user_input: str, db: Session, chat_id: int) -> dict[str,
             break
 
     tools_used = []
+    total_input_tokens = 0
+    total_output_tokens = 0
     for msg in messages:
         if hasattr(msg, "tool_calls") and msg.tool_calls:
             for tc in msg.tool_calls:
                 tool_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
                 if tool_name:
                     tools_used.append(tool_name)
+        # Accumulate token usage from AI messages
+        usage = getattr(msg, "usage_metadata", None)
+        if usage:
+            total_input_tokens += getattr(usage, "input_tokens", 0) or (usage.get("input_tokens", 0) if isinstance(usage, dict) else 0)
+            total_output_tokens += getattr(usage, "output_tokens", 0) or (usage.get("output_tokens", 0) if isinstance(usage, dict) else 0)
+
+    # Persist token usage
+    if total_input_tokens or total_output_tokens:
+        try:
+            meta_crud.log_token_usage(meta, chat_id, total_input_tokens, total_output_tokens)
+        except Exception:
+            pass  # Don't break the request if logging fails
 
     # Persist the user message and the AI reply for future context
     append_chat_history(chat_id, [current_message, AIMessage(content=response_text)])

@@ -6,8 +6,8 @@ import secrets
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timezone, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from .models import Item, UserCode, AccountLink, AuthorizedUser
+from sqlalchemy import text, func
+from .models import Item, UserCode, AccountLink, AuthorizedUser, AdminUser, MessageLog, TokenUsage
 
 
 def get_item_by_id(db: Session, item_id: int) -> Optional[Item]:
@@ -602,3 +602,211 @@ def is_user_blocked(meta: Session, chat_id: int) -> bool:
     if row is None:
         return False
     return not bool(row.is_authorized) and row.attempts >= MAX_ACCESS_ATTEMPTS
+
+
+# ---------------------------------------------------------------------------
+# Admin CRUD
+# ---------------------------------------------------------------------------
+
+
+def is_admin(meta: Session, chat_id: int) -> bool:
+    """Check whether a user has admin privileges.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        True if the user is an admin.
+    """
+    return meta.query(AdminUser).filter(AdminUser.chat_id == chat_id).first() is not None
+
+
+def grant_admin(meta: Session, chat_id: int) -> None:
+    """Grant admin access to a user.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+    """
+    existing = meta.query(AdminUser).filter(AdminUser.chat_id == chat_id).first()
+    if not existing:
+        meta.add(AdminUser(chat_id=chat_id))
+        meta.commit()
+
+
+def revoke_admin(meta: Session, chat_id: int) -> bool:
+    """Revoke admin access from a user.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+
+    Returns:
+        True if the user was an admin and has been removed.
+    """
+    row = meta.query(AdminUser).filter(AdminUser.chat_id == chat_id).first()
+    if row:
+        meta.delete(row)
+        meta.commit()
+        return True
+    return False
+
+
+def get_all_admins(meta: Session) -> list[int]:
+    """Return chat_ids of all admin users.
+
+    Args:
+        meta: Metadata database session
+
+    Returns:
+        List of admin chat_ids.
+    """
+    rows = meta.query(AdminUser).all()
+    return [r.chat_id for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Message logging CRUD
+# ---------------------------------------------------------------------------
+
+
+def log_message(meta: Session, chat_id: int) -> None:
+    """Record that a user sent a message.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+    """
+    meta.add(MessageLog(chat_id=chat_id))
+    meta.commit()
+
+
+def get_total_users(meta: Session) -> int:
+    """Return the number of distinct users who have ever sent a message.
+
+    Args:
+        meta: Metadata database session
+
+    Returns:
+        Count of unique chat_ids in the message log.
+    """
+    result = meta.query(func.count(func.distinct(MessageLog.chat_id))).scalar()
+    return result or 0
+
+
+def get_all_user_chat_ids(meta: Session) -> list[int]:
+    """Return all distinct chat_ids that have ever sent a message.
+
+    Args:
+        meta: Metadata database session
+
+    Returns:
+        List of unique chat_ids.
+    """
+    rows = meta.query(func.distinct(MessageLog.chat_id)).all()
+    return [r[0] for r in rows]
+
+
+def get_daily_active_users(meta: Session, day: date) -> list[int]:
+    """Return chat_ids of users who sent at least one message on *day*.
+
+    Args:
+        meta: Metadata database session
+        day: The calendar date to query
+
+    Returns:
+        List of chat_ids active on that day.
+    """
+    start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    rows = (
+        meta.query(func.distinct(MessageLog.chat_id))
+        .filter(MessageLog.timestamp >= start, MessageLog.timestamp < end)
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Token usage CRUD
+# ---------------------------------------------------------------------------
+
+
+def log_token_usage(
+    meta: Session, chat_id: int, input_tokens: int, output_tokens: int
+) -> None:
+    """Record token consumption for a single agent invocation.
+
+    Args:
+        meta: Metadata database session
+        chat_id: Telegram chat/user ID
+        input_tokens: Number of prompt/input tokens used
+        output_tokens: Number of completion/output tokens used
+    """
+    meta.add(
+        TokenUsage(
+            chat_id=chat_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    )
+    meta.commit()
+
+
+def get_daily_token_usage(meta: Session, day: date) -> dict[str, int]:
+    """Sum token usage for a given calendar day.
+
+    Args:
+        meta: Metadata database session
+        day: The calendar date to query
+
+    Returns:
+        Dict with ``input_tokens``, ``output_tokens``, and ``total_tokens``.
+    """
+    start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    row = (
+        meta.query(
+            func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+            func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+        )
+        .filter(TokenUsage.timestamp >= start, TokenUsage.timestamp < end)
+        .one()
+    )
+    return {
+        "input_tokens": row[0],
+        "output_tokens": row[1],
+        "total_tokens": row[0] + row[1],
+    }
+
+
+def get_monthly_token_usage(meta: Session, year: int, month: int) -> dict[str, int]:
+    """Sum token usage for a given calendar month.
+
+    Args:
+        meta: Metadata database session
+        year: Year (e.g. 2026)
+        month: Month number (1-12)
+
+    Returns:
+        Dict with ``input_tokens``, ``output_tokens``, and ``total_tokens``.
+    """
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    row = (
+        meta.query(
+            func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+            func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+        )
+        .filter(TokenUsage.timestamp >= start, TokenUsage.timestamp < end)
+        .one()
+    )
+    return {
+        "input_tokens": row[0],
+        "output_tokens": row[1],
+        "total_tokens": row[0] + row[1],
+    }
