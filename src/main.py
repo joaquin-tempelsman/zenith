@@ -26,10 +26,15 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    """Log configuration status and start the daily-report scheduler."""
+    """Log configuration status, run migrations, and start the daily-report scheduler."""
     print(f"📱 Telegram Bot Token configured: {bool(settings.telegram_bot_token)}")
     print(f"🤖 OpenAI API Key configured: {bool(settings.openai_api_key)}")
     print(f"🔑 Admin secret code configured: {bool(settings.admin_secret_code)}")
+
+    # Auto-apply pending Alembic migrations to all per-user databases
+    from .database.models import run_migrations
+    run_migrations()
+
     print(f"📊 Daily report scheduled at {settings.daily_report_hour}:00 UTC")
     asyncio.create_task(_daily_report_loop())
 

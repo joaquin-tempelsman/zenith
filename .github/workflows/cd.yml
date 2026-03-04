@@ -77,6 +77,13 @@ jobs:
             # Pull latest code
             git pull origin main
 
+            # Ensure backup cron and sqlite3 are present
+            apt-get install -y sqlite3 2>/dev/null || true
+            mkdir -p /opt/backups/zenith
+            chmod +x scripts/backup-databases.sh
+            BACKUP_CRON="0 3 * * * /opt/inventory-system/scripts/backup-databases.sh /opt/inventory-system/data /opt/backups/zenith >> /var/log/zenith-backup.log 2>&1"
+            ( crontab -l 2>/dev/null | grep -v 'backup-databases.sh'; echo "$BACKUP_CRON" ) | crontab -
+
             # Restart services with both compose files
             docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml --env-file .env down
             docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml --env-file .env up -d --build
